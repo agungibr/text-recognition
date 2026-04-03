@@ -1,3 +1,9 @@
+"""
+ui/panel_right.py
+─────────────────
+Right panel — detection results, metrics, and crop thumbnails.
+"""
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QTableWidget, QTableWidgetItem,
@@ -9,6 +15,7 @@ from PyQt6.QtGui import QColor
 
 from ui.theme import COLORS
 from ui.widgets import MetricCard, Divider, ImageViewer
+
 
 class RightPanel(QWidget):
     def __init__(self, parent=None):
@@ -28,50 +35,38 @@ class RightPanel(QWidget):
         root.addWidget(self.stack)
 
     def _build_placeholder(self) -> QWidget:
-        w = QWidget()
-        w.setStyleSheet(f"background:{COLORS['surface']};")
+        self._placeholder = QWidget()
 
-        lay = QVBoxLayout(w)
+        lay = QVBoxLayout(self._placeholder)
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        lbl = QLabel("No results yet.\nRun detection to see output here.")
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet(
-            f"color:{COLORS['text_muted']};font-size:12px;line-height:1.6;"
+        self._placeholder_lbl = QLabel(
+            "No results yet.\nRun detection to see output here."
         )
-        lay.addWidget(lbl)
-        return w
+        self._placeholder_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self._placeholder_lbl)
+
+        self._apply_placeholder_style()
+        return self._placeholder
 
     def _build_results_view(self) -> QWidget:
-        w = QWidget()
-        w.setStyleSheet(f"background:{COLORS['bg']};")
+        self._results_widget = QWidget()
 
-        lay = QVBoxLayout(w)
+        lay = QVBoxLayout(self._results_widget)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(10)
 
         hdr = QHBoxLayout()
-
-        det_lbl = QLabel("DETECTIONS")
-        det_lbl.setStyleSheet(
-            f"color:{COLORS['text_muted']};"
-            f"font-size:10px;font-weight:700;letter-spacing:2px;"
-        )
-
+        self._det_hdr_lbl = QLabel("DETECTIONS")
         self._det_count_lbl = QLabel("0 objects")
-        self._det_count_lbl.setStyleSheet(
-            f"color:{COLORS['accent']};"
-            f"font-size:11px;font-family:'Consolas',monospace;"
-        )
-
-        hdr.addWidget(det_lbl)
+        hdr.addWidget(self._det_hdr_lbl)
         hdr.addStretch()
         hdr.addWidget(self._det_count_lbl)
         lay.addLayout(hdr)
 
         metrics_row = QHBoxLayout()
         self._card_total = MetricCard("Total", "0")
-        self._card_conf  = MetricCard("Avg Conf", "—")
+        self._card_conf = MetricCard("Avg Conf", "—")
         metrics_row.addWidget(self._card_total)
         metrics_row.addWidget(self._card_conf)
         lay.addLayout(metrics_row)
@@ -83,19 +78,15 @@ class RightPanel(QWidget):
 
         lay.addWidget(Divider())
 
-        crops_lbl = QLabel("CROPS")
-        crops_lbl.setStyleSheet(
-            f"color:{COLORS['text_muted']};"
-            f"font-size:10px;font-weight:700;letter-spacing:2px;"
-        )
-        lay.addWidget(crops_lbl)
+        self._crops_hdr_lbl = QLabel("CROPS")
+        lay.addWidget(self._crops_hdr_lbl)
 
         self._crops_scroll = QScrollArea()
         self._crops_scroll.setWidgetResizable(True)
         self._crops_scroll.setFixedHeight(160)
 
         self._crops_container = QWidget()
-        self._crops_layout    = QHBoxLayout(self._crops_container)
+        self._crops_layout = QHBoxLayout(self._crops_container)
         self._crops_layout.setContentsMargins(4, 4, 4, 4)
         self._crops_layout.setSpacing(6)
         self._crops_layout.addStretch()
@@ -103,7 +94,8 @@ class RightPanel(QWidget):
         self._crops_scroll.setWidget(self._crops_container)
         lay.addWidget(self._crops_scroll)
 
-        return w
+        self._apply_results_style()
+        return self._results_widget
 
     def _build_table(self) -> QTableWidget:
         table = QTableWidget()
@@ -121,12 +113,41 @@ class RightPanel(QWidget):
         table.setColumnWidth(3, 90)
 
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
         table.verticalHeader().setVisible(False)
         table.setShowGrid(False)
         table.setAlternatingRowColors(False)
 
         return table
+
+    # ── inline theme styles ──────────────────────────────────────────────
+
+    def _apply_placeholder_style(self) -> None:
+        self._placeholder.setStyleSheet(
+            f"background:{COLORS['surface']};"
+        )
+        self._placeholder_lbl.setStyleSheet(
+            f"color:{COLORS['text_muted']};font-size:12px;line-height:1.6;"
+        )
+
+    def _apply_results_style(self) -> None:
+        self._results_widget.setStyleSheet(f"background:{COLORS['bg']};")
+
+        _muted = (
+            f"color:{COLORS['text_muted']};"
+            f"font-size:10px;font-weight:700;letter-spacing:2px;"
+        )
+        self._det_hdr_lbl.setStyleSheet(_muted)
+        self._crops_hdr_lbl.setStyleSheet(_muted)
+
+        self._det_count_lbl.setStyleSheet(
+            f"color:{COLORS['accent']};"
+            f"font-size:11px;font-family:'Consolas',monospace;"
+        )
+
+    # ── public API ───────────────────────────────────────────────────────
 
     def showResult(self, result: dict) -> None:
         dets: list[dict] = result.get("detections", [])
@@ -147,9 +168,10 @@ class RightPanel(QWidget):
             row = self._table.rowCount()
             self._table.insertRow(row)
 
-            self._table.setItem(row, 0, self._cell(
-                f"{det['id']:02d}", Qt.AlignmentFlag.AlignCenter
-            ))
+            self._table.setItem(
+                row, 0,
+                self._cell(f"{det['id']:02d}", Qt.AlignmentFlag.AlignCenter),
+            )
             self._table.setItem(row, 1, self._cell(det["text"] or "—"))
 
             conf_item = self._cell(
@@ -158,10 +180,13 @@ class RightPanel(QWidget):
             conf_item.setForeground(self._conf_color(det["conf"]))
             self._table.setItem(row, 2, conf_item)
 
-            self._table.setItem(row, 3, self._cell(
-                f"{det['w']:.0f}×{det['h']:.0f}",
-                Qt.AlignmentFlag.AlignCenter,
-            ))
+            self._table.setItem(
+                row, 3,
+                self._cell(
+                    f"{det['w']:.0f}×{det['h']:.0f}",
+                    Qt.AlignmentFlag.AlignCenter,
+                ),
+            )
             self._table.setRowHeight(row, 34)
 
         self._clear_crops()
@@ -188,6 +213,13 @@ class RightPanel(QWidget):
         self._card_conf.setValue("—")
         self._clear_crops()
         self.stack.setCurrentIndex(0)
+
+    def refresh_theme(self) -> None:
+        """Re-apply inline theme styles after a theme toggle."""
+        self._apply_placeholder_style()
+        self._apply_results_style()
+        self._card_total.refresh_theme()
+        self._card_conf.refresh_theme()
 
     @staticmethod
     def _cell(

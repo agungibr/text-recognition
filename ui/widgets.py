@@ -4,51 +4,51 @@ ui/widgets.py
 Reusable custom Qt widgets used across all panels.
 
 Exports:
-    Badge         – coloured status pill (idle / busy / ok / error)
-    SectionLabel  – small all-caps section header label
-    ValueLabel    – monospace value display label
-    MetricCard    – bordered card showing a label + large value
-    Divider       – 1-px horizontal rule QFrame
-    ImageViewer   – aspect-ratio-preserving image display label
-    SectionGroup  – QFrame-based section container (replaces QGroupBox)
+    NoScrollSlider – QSlider subclass that ignores wheel events
+    Badge          – coloured status pill (idle / busy / ok / error)
+    SectionLabel   – small all-caps section header label
+    ValueLabel     – monospace value display label
+    MetricCard     – bordered card showing a label + large value
+    Divider        – 1-px horizontal rule QFrame
+    ImageViewer    – aspect-ratio-preserving image display label
+    SectionGroup   – QFrame-based section container (replaces QGroupBox)
 
-WHY SectionGroup INSTEAD OF QGroupBox
-──────────────────────────────────────
-QGroupBox with Fusion style on Windows has two compounding problems:
-
-1. The CSS `margin-top` / `subcontrol-origin` approach for the title
-   interacts badly with the Fusion style engine, causing the content
-   area to be calculated as zero-height on some DPI configurations.
-
-2. Children of a styled QGroupBox inherit `background-color` from the
-   global `QWidget { background-color: ... }` rule, making them render
-   with the same colour as the main window background — effectively
-   invisible against the group box surface colour.
-
-SectionGroup fixes both by:
-  • Using a plain QFrame with a border (no title subcontrol tricks)
-  • Drawing the title as a normal QLabel child with an explicit parent
-  • Storing *every* internal child widget/layout as a `self._xxx`
-    attribute so Python never garbage-collects their wrappers while
-    the C++ Qt objects are still in use
-  • Passing an explicit `parent` argument to every internal widget
-    constructor so Qt's C++ ownership chain is unambiguous from the
-    moment of construction
+Every widget that uses inline, theme-dependent styles provides a public
+``refresh_theme()`` method.  Call it after ``ThemeManager.toggle()`` to
+re-apply colours without rebuilding the widget tree.
 """
 
 import cv2
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QEvent
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QSizePolicy,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
 from ui.theme import COLORS
+
+
+# ─────────────────────────────────────────────
+#  NO-SCROLL SLIDER
+# ─────────────────────────────────────────────
+
+
+class NoScrollSlider(QSlider):
+    """QSlider that ignores mouse-wheel events.
+
+    Prevents accidental value changes when the user scrolls a parent
+    QScrollArea.  The slider can still be changed by click or drag.
+    """
+
+    def wheelEvent(self, event: QEvent) -> None:      # type: ignore[override]
+        event.ignore()
+
 
 # ─────────────────────────────────────────────
 #  BADGE
@@ -58,26 +58,26 @@ from ui.theme import COLORS
 class Badge(QLabel):
     """Coloured pill widget that reflects a named state."""
 
-    STYLES = {
-        "ok": (COLORS["success"], COLORS["success_dim"], "●"),
-        "idle": (COLORS["text_muted"], COLORS["surface3"], "○"),
-        "busy": (COLORS["warning"], "#5A3D00", "◌"),
-        "error": (COLORS["error"], "#4A1A1A", "✕"),
-    }
-
     def __init__(self, state: str = "idle", text: str = "", parent=None):
         super().__init__(parent)
-        self.setState(state, text)
+        self._state = state
+        self._text = text
+        self._apply_style()
 
-    def setState(self, state: str, text: str = "") -> None:
-        """Update badge appearance.
+    @staticmethod
+    def _style_for(state: str) -> tuple[str, str, str]:
+        """Return (fg, bg, icon) for the given *state*."""
+        styles = {
+            "ok":    (COLORS["success"],    COLORS["success_dim"], "●"),
+            "idle":  (COLORS["text_muted"], COLORS["surface3"],    "○"),
+            "busy":  (COLORS["warning"],    COLORS["warning_dim"], "◌"),
+            "error": (COLORS["error"],      COLORS["error_dim"],   "✕"),
+        }
+        return styles.get(state, styles["idle"])
 
-        Args:
-            state: One of ``"ok"``, ``"idle"``, ``"busy"``, ``"error"``.
-            text:  Optional label shown next to the icon.
-        """
-        fg, bg, icon = self.STYLES.get(state, self.STYLES["idle"])
-        label = f"{icon}  {text}" if text else icon
+    def _apply_style(self) -> None:
+        fg, bg, icon = self._style_for(self._state)
+        label = f"{icon}  {self._text}" if self._text else icon
         self.setText(label)
         self.setStyleSheet(f"""
             QLabel {{
@@ -92,6 +92,14 @@ class Badge(QLabel):
             }}
         """)
 
+    def setState(self, state: str, text: str = "") -> None:
+        self._state = state
+        self._text = text
+        self._apply_style()
+
+    def refresh_theme(self) -> None:
+        self._apply_style()
+
 
 # ─────────────────────────────────────────────
 #  SECTION LABEL
@@ -103,6 +111,9 @@ class SectionLabel(QLabel):
 
     def __init__(self, text: str, parent=None):
         super().__init__(text.upper(), parent)
+        self._apply_style()
+
+    def _apply_style(self) -> None:
         self.setStyleSheet(f"""
             color: {COLORS["text_muted"]};
             font-size: 10px;
@@ -110,6 +121,9 @@ class SectionLabel(QLabel):
             letter-spacing: 2px;
             padding: 8px 0 4px 0;
         """)
+
+    def refresh_theme(self) -> None:
+        self._apply_style()
 
 
 # ─────────────────────────────────────────────
@@ -122,11 +136,17 @@ class ValueLabel(QLabel):
 
     def __init__(self, text: str = "—", parent=None):
         super().__init__(text, parent)
+        self._apply_style()
+
+    def _apply_style(self) -> None:
         self.setStyleSheet(f"""
             color: {COLORS["text_primary"]};
             font-size: 13px;
             font-family: "Consolas", monospace;
         """)
+
+    def refresh_theme(self) -> None:
+        self._apply_style()
 
 
 # ─────────────────────────────────────────────
@@ -139,6 +159,20 @@ class MetricCard(QFrame):
 
     def __init__(self, label: str, value: str = "—", parent=None):
         super().__init__(parent)
+        self._label_text = label.upper()
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(2)
+
+        self._lbl = QLabel(self._label_text, self)
+        self._val = QLabel(value, self)
+
+        lay.addWidget(self._lbl)
+        lay.addWidget(self._val)
+        self._apply_style()
+
+    def _apply_style(self) -> None:
         self.setStyleSheet(f"""
             QFrame {{
                 background: {COLORS["surface2"]};
@@ -147,19 +181,11 @@ class MetricCard(QFrame):
                 padding: 2px;
             }}
         """)
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(2)
-
-        lbl = QLabel(label.upper(), self)
-        lbl.setStyleSheet(
+        self._lbl.setStyleSheet(
             f"color:{COLORS['text_muted']};"
             f"font-size:10px;font-weight:700;letter-spacing:1.5px;"
             f"background:transparent;border:none;"
         )
-
-        self._val = QLabel(value, self)
         self._val.setStyleSheet(
             f"color:{COLORS['text_primary']};"
             f"font-size:18px;font-weight:600;"
@@ -167,12 +193,11 @@ class MetricCard(QFrame):
             f"background:transparent;border:none;"
         )
 
-        lay.addWidget(lbl)
-        lay.addWidget(self._val)
-
     def setValue(self, v) -> None:
-        """Set the displayed value (accepts any type, converts via str)."""
         self._val.setText(str(v))
+
+    def refresh_theme(self) -> None:
+        self._apply_style()
 
 
 # ─────────────────────────────────────────────
@@ -232,23 +257,29 @@ class ImageViewer(QLabel):
                 pix = QPixmap.fromImage(qimg)
 
             self._pix = pix
-            self.setStyleSheet(f"""
-                background: {COLORS["surface"]};
-                border: 1px solid {COLORS["border"]};
-                border-radius: 6px;
-            """)
+            self._apply_image_style()
             self._refresh()
 
         except Exception as exc:
             self._pix = None
             self._show_placeholder(f"Error: {exc}")
 
+    def refresh_theme(self) -> None:
+        if self._pix and not self._pix.isNull():
+            self._apply_image_style()
+        else:
+            self._apply_placeholder_style()
+
     # ── private ──────────────────────────────
 
-    def _show_placeholder(self, text: str = "No image selected") -> None:
-        self._pix = None
-        self.setPixmap(QPixmap())
-        self.setText(text)
+    def _apply_image_style(self) -> None:
+        self.setStyleSheet(f"""
+            background: {COLORS["surface"]};
+            border: 1px solid {COLORS["border"]};
+            border-radius: 6px;
+        """)
+
+    def _apply_placeholder_style(self) -> None:
         self.setStyleSheet(f"""
             background: {COLORS["surface"]};
             border: 1px dashed {COLORS["border_active"]};
@@ -257,6 +288,12 @@ class ImageViewer(QLabel):
             font-size: 12px;
             letter-spacing: 1px;
         """)
+
+    def _show_placeholder(self, text: str = "No image selected") -> None:
+        self._pix = None
+        self.setPixmap(QPixmap())
+        self.setText(text)
+        self._apply_placeholder_style()
 
     def _refresh(self) -> None:
         if self._pix and not self._pix.isNull():
@@ -281,32 +318,49 @@ class SectionGroup(QFrame):
     """
     Reliable QGroupBox replacement for Fusion-styled dark-theme apps.
 
-    Renders as a bordered card with a shaded title bar on top and a
-    transparent content area below.  Unlike QGroupBox, it does **not**
-    rely on CSS ``margin-top`` / ``subcontrol-origin`` for title
-    placement, which is the root cause of invisible-content bugs with
-    Fusion style on Windows.
-
-    All internal child widgets are:
-
-    * Created with an **explicit parent** argument so Qt's C++ ownership
-      chain is established at construction time (no deferred reparenting).
-    * Stored as ``self._xxx`` attributes so the Python reference count
-      never drops to zero while the widget is alive.
-
-    Usage::
-
-        box = SectionGroup("Model")
-        box.inner_layout().addWidget(some_widget)
-        parent_layout.addWidget(box)
+    All internal child widgets are created with an explicit ``parent``
+    argument and stored as ``self._xxx`` attributes for GC safety.
     """
 
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
+        self._title_text = title.upper()
 
-        # ── outer frame ───────────────────────────────────────────────────
+        # ── outer frame ───────────────────────────────────────────────
         self.setObjectName("sectionGroup")
         self.setFrameShape(QFrame.Shape.NoFrame)
+
+        # ── outer layout ─────────────────────────────────────────────
+        self._outer_layout = QVBoxLayout(self)
+        self._outer_layout.setContentsMargins(0, 0, 0, 0)
+        self._outer_layout.setSpacing(0)
+
+        # ── title bar ────────────────────────────────────────────────
+        self._title_bar = QWidget(self)
+        self._title_bar.setObjectName("sgTitleBar")
+
+        self._title_bar_layout = QHBoxLayout(self._title_bar)
+        self._title_bar_layout.setContentsMargins(12, 7, 12, 7)
+        self._title_bar_layout.setSpacing(0)
+
+        self._title_label = QLabel(self._title_text, self._title_bar)
+        self._title_bar_layout.addWidget(self._title_label)
+        self._outer_layout.addWidget(self._title_bar)
+
+        # ── content widget ───────────────────────────────────────────
+        self._content_widget = QWidget(self)
+        self._content_widget.setObjectName("sgContent")
+
+        self._inner_layout = QVBoxLayout(self._content_widget)
+        self._inner_layout.setContentsMargins(10, 10, 10, 10)
+        self._inner_layout.setSpacing(8)
+
+        self._outer_layout.addWidget(self._content_widget)
+
+        # Apply theme styles
+        self._apply_style()
+
+    def _apply_style(self) -> None:
         self.setStyleSheet(f"""
             QFrame#sectionGroup {{
                 background: {COLORS["surface"]};
@@ -314,15 +368,6 @@ class SectionGroup(QFrame):
                 border-radius: 6px;
             }}
         """)
-
-        # ── outer layout (installs directly on self) ──────────────────────
-        self._outer_layout = QVBoxLayout(self)
-        self._outer_layout.setContentsMargins(0, 0, 0, 0)
-        self._outer_layout.setSpacing(0)
-
-        # ── title bar — explicit parent=self ─────────────────────────────
-        self._title_bar = QWidget(self)
-        self._title_bar.setObjectName("sgTitleBar")
         self._title_bar.setStyleSheet(f"""
             QWidget#sgTitleBar {{
                 background: {COLORS["surface2"]};
@@ -330,14 +375,6 @@ class SectionGroup(QFrame):
                 border-bottom: 1px solid {COLORS["border"]};
             }}
         """)
-
-        # layout on the title bar
-        self._title_bar_layout = QHBoxLayout(self._title_bar)
-        self._title_bar_layout.setContentsMargins(12, 7, 12, 7)
-        self._title_bar_layout.setSpacing(0)
-
-        # title label — explicit parent=self._title_bar
-        self._title_label = QLabel(title.upper(), self._title_bar)
         self._title_label.setStyleSheet(f"""
             QLabel {{
                 background: transparent;
@@ -348,12 +385,6 @@ class SectionGroup(QFrame):
                 letter-spacing: 1.5px;
             }}
         """)
-        self._title_bar_layout.addWidget(self._title_label)
-        self._outer_layout.addWidget(self._title_bar)
-
-        # ── content widget — explicit parent=self ─────────────────────────
-        self._content_widget = QWidget(self)
-        self._content_widget.setObjectName("sgContent")
         self._content_widget.setStyleSheet("""
             QWidget#sgContent {
                 background: transparent;
@@ -361,15 +392,11 @@ class SectionGroup(QFrame):
             }
         """)
 
-        # inner layout installed on the content widget
-        self._inner_layout = QVBoxLayout(self._content_widget)
-        self._inner_layout.setContentsMargins(10, 10, 10, 10)
-        self._inner_layout.setSpacing(8)
-
-        self._outer_layout.addWidget(self._content_widget)
-
-    # ── public API ────────────────────────────────────────────────────────
+    # ── public API ───────────────────────────────────────────────────
 
     def inner_layout(self) -> QVBoxLayout:
         """Return the content ``QVBoxLayout`` for adding child widgets."""
         return self._inner_layout
+
+    def refresh_theme(self) -> None:
+        self._apply_style()

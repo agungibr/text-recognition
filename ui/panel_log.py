@@ -1,3 +1,9 @@
+"""
+ui/panel_log.py
+───────────────
+Bottom log panel — timestamped event list.
+"""
+
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
@@ -22,14 +28,28 @@ class LogPanel(QWidget):
 
         hdr = QHBoxLayout()
 
-        lbl = QLabel("LOG")
-        lbl.setStyleSheet(
+        self._hdr_lbl = QLabel("LOG")
+        self._clear_btn = QPushButton("Clear")
+        self._clear_btn.setFixedSize(50, 20)
+        self._clear_btn.clicked.connect(self.clear)
+
+        hdr.addWidget(self._hdr_lbl)
+        hdr.addStretch()
+        hdr.addWidget(self._clear_btn)
+        root.addLayout(hdr)
+
+        self._log_list = QListWidget()
+        root.addWidget(self._log_list)
+
+        self._apply_theme_styles()
+
+    # ── inline theme styles ──────────────────────────────────────────────
+
+    def _apply_theme_styles(self) -> None:
+        self._hdr_lbl.setStyleSheet(
             f"color:{COLORS['text_muted']};"
             f"font-size:10px;font-weight:700;letter-spacing:2px;"
         )
-
-        self._clear_btn = QPushButton("Clear")
-        self._clear_btn.setFixedSize(50, 20)
         self._clear_btn.setStyleSheet(f"""
             QPushButton {{
                 background: transparent;
@@ -41,14 +61,6 @@ class LogPanel(QWidget):
                 color: {COLORS['text_secondary']};
             }}
         """)
-        self._clear_btn.clicked.connect(self.clear)
-
-        hdr.addWidget(lbl)
-        hdr.addStretch()
-        hdr.addWidget(self._clear_btn)
-        root.addLayout(hdr)
-
-        self._log_list = QListWidget()
         self._log_list.setStyleSheet(f"""
             QListWidget {{
                 background: {COLORS["surface"]};
@@ -63,10 +75,11 @@ class LogPanel(QWidget):
                 color: {COLORS["text_secondary"]};
             }}
         """)
-        root.addWidget(self._log_list)
+
+    # ── public API ───────────────────────────────────────────────────────
 
     def append(self, msg: str) -> None:
-        ts   = datetime.now().strftime("%H:%M:%S")
+        ts = datetime.now().strftime("%H:%M:%S")
         item = QListWidgetItem(f"  {ts}  {msg}")
 
         if any(tok in msg for tok in ("✕", "Error", "error")):
@@ -81,3 +94,6 @@ class LogPanel(QWidget):
 
     def clear(self) -> None:
         self._log_list.clear()
+
+    def refresh_theme(self) -> None:
+        self._apply_theme_styles()

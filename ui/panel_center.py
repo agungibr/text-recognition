@@ -1,3 +1,9 @@
+"""
+ui/panel_center.py
+──────────────────
+Centre panel — file queue list + image preview.
+"""
+
 import io
 import tempfile
 
@@ -39,22 +45,14 @@ class CenterPanel(QWidget):
         root.addWidget(splitter)
 
     def _build_queue_pane(self) -> QWidget:
-        pane = QWidget()
-        pane.setStyleSheet(
-            f"background:{COLORS['surface']};"
-            f"border-bottom:1px solid {COLORS['border']};"
-        )
-        lay = QVBoxLayout(pane)
+        self._queue_pane = QWidget()
+        lay = QVBoxLayout(self._queue_pane)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(6)
 
         hdr = QHBoxLayout()
-        lbl = QLabel("FILE QUEUE")
-        lbl.setStyleSheet(
-            f"color:{COLORS['text_muted']};"
-            f"font-size:10px;font-weight:700;letter-spacing:2px;"
-        )
-        hdr.addWidget(lbl)
+        self._queue_lbl = QLabel("FILE QUEUE")
+        hdr.addWidget(self._queue_lbl)
         hdr.addStretch()
         lay.addLayout(hdr)
 
@@ -63,27 +61,19 @@ class CenterPanel(QWidget):
         self.file_list.currentItemChanged.connect(self._on_item_changed)
         lay.addWidget(self.file_list)
 
-        return pane
+        self._apply_queue_style()
+        return self._queue_pane
 
     def _build_preview_pane(self) -> QWidget:
-        pane = QWidget()
-        pane.setStyleSheet(f"background:{COLORS['bg']};")
-        lay = QVBoxLayout(pane)
+        self._preview_pane = QWidget()
+        lay = QVBoxLayout(self._preview_pane)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(6)
 
         hdr = QHBoxLayout()
-        vlbl = QLabel("PREVIEW")
-        vlbl.setStyleSheet(
-            f"color:{COLORS['text_muted']};"
-            f"font-size:10px;font-weight:700;letter-spacing:2px;"
-        )
+        self._preview_lbl = QLabel("PREVIEW")
         self._img_name_lbl = QLabel()
-        self._img_name_lbl.setStyleSheet(
-            f"color:{COLORS['text_secondary']};"
-            f"font-size:11px;font-family:'Consolas',monospace;"
-        )
-        hdr.addWidget(vlbl)
+        hdr.addWidget(self._preview_lbl)
         hdr.addStretch()
         hdr.addWidget(self._img_name_lbl)
         lay.addLayout(hdr)
@@ -94,7 +84,33 @@ class CenterPanel(QWidget):
         )
         lay.addWidget(self.image_viewer)
 
-        return pane
+        self._apply_preview_style()
+        return self._preview_pane
+
+    # ── inline theme styles ──────────────────────────────────────────────
+
+    def _apply_queue_style(self) -> None:
+        self._queue_pane.setStyleSheet(
+            f"background:{COLORS['surface']};"
+            f"border-bottom:1px solid {COLORS['border']};"
+        )
+        self._queue_lbl.setStyleSheet(
+            f"color:{COLORS['text_muted']};"
+            f"font-size:10px;font-weight:700;letter-spacing:2px;"
+        )
+
+    def _apply_preview_style(self) -> None:
+        self._preview_pane.setStyleSheet(f"background:{COLORS['bg']};")
+        self._preview_lbl.setStyleSheet(
+            f"color:{COLORS['text_muted']};"
+            f"font-size:10px;font-weight:700;letter-spacing:2px;"
+        )
+        self._img_name_lbl.setStyleSheet(
+            f"color:{COLORS['text_secondary']};"
+            f"font-size:11px;font-family:'Consolas',monospace;"
+        )
+
+    # ── public API ───────────────────────────────────────────────────────
 
     def setFiles(self, files: list[dict]) -> None:
         self._files = files
@@ -113,7 +129,7 @@ class CenterPanel(QWidget):
 
         for i in range(self.file_list.count()):
             item = self.file_list.item(i)
-            fd   = item.data(Qt.ItemDataRole.UserRole)
+            fd = item.data(Qt.ItemDataRole.UserRole)
             if fd and fd.get("name") == filename:
                 item.setText(f"{filename}  [{n}]")
                 item.setForeground(QColor(COLORS["success"]))
@@ -121,6 +137,14 @@ class CenterPanel(QWidget):
 
     def clearResults(self) -> None:
         self._results.clear()
+
+    def refresh_theme(self) -> None:
+        """Re-apply inline theme styles after a theme toggle."""
+        self._apply_queue_style()
+        self._apply_preview_style()
+        self.image_viewer.refresh_theme()
+
+    # ── private ──────────────────────────────────────────────────────────
 
     def _on_item_changed(
         self,
@@ -140,7 +164,7 @@ class CenterPanel(QWidget):
 
     def _load_preview(self, file_dict: dict) -> None:
         name = file_dict["name"]
-        ext  = Path(name).suffix.lower()
+        ext = Path(name).suffix.lower()
 
         if file_dict.get("type") == "path":
             path = file_dict.get("path", "")

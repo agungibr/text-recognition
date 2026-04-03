@@ -3,25 +3,33 @@ import sys
 import zipfile
 from datetime import datetime
 
-from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QLabel, QFrame, QProgressBar,
-    QStatusBar, QFileDialog, QMessageBox,
-    QApplication,
-)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QSplitter,
+    QStatusBar,
+    QVBoxLayout,
+    QWidget,
+)
 
+from core.file_utils import collect_files_from_folder, collect_files_from_paths
+from core.inference import InferenceWorker
+from core.model_loader import ModelLoader
+from ui.panel_center import CenterPanel
+from ui.panel_left import LeftPanel
+from ui.panel_log import LogPanel
+from ui.panel_right import RightPanel
 from ui.theme import COLORS, STYLESHEET
 from ui.widgets import Badge
-from ui.panel_left import LeftPanel
-from ui.panel_center import CenterPanel
-from ui.panel_right import RightPanel
-from ui.panel_log import LogPanel
 
-from core.model_loader import ModelLoader
-from core.inference import InferenceWorker
-from core.file_utils import collect_files_from_paths, collect_files_from_folder
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -30,19 +38,25 @@ class MainWindow(QMainWindow):
         self.resize(1280, 820)
         self.setMinimumSize(900, 600)
 
-        self._model:      object       = None
-        self._reader:     object       = None
-        self._files:      list[dict]   = []
-        self._results:    list[dict]   = []
-        self._output_dir: str | None   = None
+        self._model: object = None
+        self._reader: object = None
+        self._files: list[dict] = []
+        self._results: list[dict] = []
+        self._output_dir: str | None = None
 
-        self._model_loader: ModelLoader | None    = None
-        self._ocr_loader:   ModelLoader | None    = None
-        self._worker:       InferenceWorker | None = None
+        self._model_loader: ModelLoader | None = None
+        self._ocr_loader: ModelLoader | None = None
+        self._worker: InferenceWorker | None = None
 
         self._build_ui()
         self._connect_signals()
         self._update_run_state()
+
+        # ── auto-load model if models/best.pt is pre-filled ───────────────
+        # Use a short delay so the window has time to show before the
+        # (potentially slow) model-loading thread starts.
+        if self.left.model_path and os.path.isfile(self.left.model_path):
+            QTimer.singleShot(300, self._load_model)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -111,7 +125,7 @@ class MainWindow(QMainWindow):
         lay.addStretch()
 
         self._model_badge = Badge("idle", "Model")
-        self._ocr_badge   = Badge("idle", "OCR")
+        self._ocr_badge = Badge("idle", "OCR")
         lay.addWidget(self._model_badge)
         lay.addSpacing(8)
         lay.addWidget(self._ocr_badge)
@@ -119,9 +133,9 @@ class MainWindow(QMainWindow):
         return bar
 
     def _build_body(self) -> QSplitter:
-        self.left   = LeftPanel()
+        self.left = LeftPanel()
         self.center = CenterPanel()
-        self.right  = RightPanel()
+        self.right = RightPanel()
 
         body = QSplitter(Qt.Orientation.Horizontal)
         body.setHandleWidth(1)
@@ -138,8 +152,7 @@ class MainWindow(QMainWindow):
     def _build_log_wrap(self) -> QWidget:
         wrap = QWidget()
         wrap.setStyleSheet(
-            f"background:{COLORS['surface']};"
-            f"border-top:1px solid {COLORS['border']};"
+            f"background:{COLORS['surface']};border-top:1px solid {COLORS['border']};"
         )
         lay = QVBoxLayout(wrap)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -167,6 +180,19 @@ class MainWindow(QMainWindow):
         ready = bool(self._model and self._reader and self._files)
         self.left.setRunnable(ready)
 
+        if ready:
+            self.left.setRunHint("")
+            return
+
+        missing = []
+        if not self._model:
+            missing.append("① Load Model")
+        if not self._reader:
+            missing.append("② Load OCR")
+        if not self._files:
+            missing.append("③ Add files")
+        self.left.setRunHint("  ·  ".join(missing))
+
     def _post_status(self, msg: str) -> None:
         self._status_bar.showMessage(msg)
         self.log_panel.append(msg)
@@ -180,7 +206,8 @@ class MainWindow(QMainWindow):
         path = self.left.model_path
         if not path or not os.path.isfile(path):
             QMessageBox.warning(
-                self, "Model not found",
+                self,
+                "Model not found",
                 f"File not found:\n{path or '(empty)'}",
             )
             return
@@ -303,11 +330,11 @@ class MainWindow(QMainWindow):
         self._post_status("Starting detection …")
 
         self._worker = InferenceWorker(
-            model      = self._model,
-            reader     = self._reader,
-            files      = self._files,
-            conf       = self.left.conf,
-            save_crops = self.left.save_crops,
+            model=self._model,
+            reader=self._reader,
+            files=self._files,
+            conf=self.left.conf,
+            save_crops=self.left.save_crops,
         )
         self._worker.progress.connect(self._on_progress)
         self._worker.result.connect(self._on_result)
@@ -320,7 +347,7 @@ class MainWindow(QMainWindow):
         self._progress_lbl.setText(label)
 
     def _on_result(self, results: list, output_dir: str) -> None:
-        self._results    = results
+        self._results = results
         self._output_dir = output_dir
 
         self._progress_bar.setValue(100)
@@ -335,9 +362,7 @@ class MainWindow(QMainWindow):
         if results:
             self.right.showResult(results[0])
 
-        self._post_status(
-            f"Detection complete — {len(results)} image(s) processed."
-        )
+        self._post_status(f"Detection complete — {len(results)} image(s) processed.")
         self._update_run_state()
 
     def _on_inference_error(self, msg: str) -> None:
@@ -372,21 +397,46 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 
+
 def _apply_palette(app: QApplication) -> None:
+    """Apply a dark Fusion palette so native widgets match the stylesheet."""
     pal = QPalette()
-    pal.setColor(QPalette.ColorRole.Window,          QColor(COLORS["bg"]))
-    pal.setColor(QPalette.ColorRole.WindowText,      QColor(COLORS["text_primary"]))
-    pal.setColor(QPalette.ColorRole.Base,            QColor(COLORS["surface"]))
-    pal.setColor(QPalette.ColorRole.AlternateBase,   QColor(COLORS["surface2"]))
-    pal.setColor(QPalette.ColorRole.Text,            QColor(COLORS["text_primary"]))
-    pal.setColor(QPalette.ColorRole.Button,          QColor(COLORS["surface2"]))
-    pal.setColor(QPalette.ColorRole.ButtonText,      QColor(COLORS["text_primary"]))
-    pal.setColor(QPalette.ColorRole.Highlight,       QColor(COLORS["accent"]))
+    pal.setColor(QPalette.ColorRole.Window, QColor(COLORS["bg"]))
+    pal.setColor(QPalette.ColorRole.WindowText, QColor(COLORS["text_primary"]))
+    pal.setColor(QPalette.ColorRole.Base, QColor(COLORS["surface"]))
+    pal.setColor(QPalette.ColorRole.AlternateBase, QColor(COLORS["surface2"]))
+    pal.setColor(QPalette.ColorRole.Text, QColor(COLORS["text_primary"]))
+    pal.setColor(QPalette.ColorRole.Button, QColor(COLORS["surface2"]))
+    pal.setColor(QPalette.ColorRole.ButtonText, QColor(COLORS["text_primary"]))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor(COLORS["accent"]))
     pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    pal.setColor(QPalette.ColorRole.ToolTipBase, QColor(COLORS["surface2"]))
+    pal.setColor(QPalette.ColorRole.ToolTipText, QColor(COLORS["text_primary"]))
     app.setPalette(pal)
 
 
+def _setup_dpi() -> None:
+    """
+    Configure High-DPI scaling before QApplication is created.
+
+    On Windows with display scaling > 100 % (e.g. 125 %, 150 %), Qt can
+    mis-map logical ↔ physical pixel coordinates, causing clicks to land
+    on the wrong widget or the layout to collapse.  Setting these env vars
+    before QApplication() ensures Qt uses the correct scale factor and
+    keeps rounding consistent across the whole session.
+    """
+    # Let the OS report the true fractional scale factor instead of
+    # rounding it to the nearest integer — critical for 125 % / 150 % DPI.
+    os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
+    # Honour per-monitor DPI changes when the window is moved between
+    # screens with different scale factors.
+    os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+
+
 def launch() -> None:
+    """Create the QApplication, apply theme, show the window, and run."""
+    _setup_dpi()
+
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLESHEET)

@@ -1,4 +1,4 @@
-# YOLO · OCR — Detection Suite
+# Text Detection Suite
 
 A local-first desktop application for running **YOLO object detection + EasyOCR text recognition** on images and DICOM radiological files. Built with PyQt6.
 

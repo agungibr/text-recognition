@@ -1,16 +1,3 @@
-"""
-ui/panel_left.py
-────────────────
-Left configuration panel — resizable sidebar (240–400 px via QSplitter).
-
-Changes from previous version:
-  • Fixed width removed → min 240 / max 400; QSplitter handles dragging.
-  • QSlider → NoScrollSlider (ignores wheel events in scroll area).
-  • "Load OCR" → "Reload OCR" (auto-loads after model; manual only for lang change).
-  • refresh_theme() cascade for theme toggling.
-  • setInteractable() bulk-enables/disables during model loading.
-"""
-
 import os
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -33,20 +20,6 @@ from ui.widgets import Badge, Divider, NoScrollSlider, SectionGroup
 
 
 class LeftPanel(QWidget):
-    """
-    Configuration sidebar (resizable 240–400 px).
-
-    Signals
-    -------
-    loadModelClicked   – user pressed "Load Model"
-    loadOCRClicked     – user pressed "Reload OCR"
-    addFilesClicked    – user pressed "+ Files"
-    addFolderClicked   – user pressed "+ Folder"
-    clearFilesClicked  – user pressed "Clear"
-    runClicked         – user pressed "▶ Run Detection"
-    exportClicked      – user pressed "↓ Export Results"
-    """
-
     loadModelClicked = pyqtSignal()
     loadOCRClicked = pyqtSignal()
     addFilesClicked = pyqtSignal()
@@ -55,7 +28,6 @@ class LeftPanel(QWidget):
     runClicked = pyqtSignal()
     exportClicked = pyqtSignal()
 
-    # ── language-combo text → EasyOCR language codes ──────────────────────
     _LANG_MAP: dict[str, list[str]] = {
         "id + en": ["id", "en"],
         "en only": ["en"],
@@ -71,21 +43,14 @@ class LeftPanel(QWidget):
         self.setMaximumWidth(400)
         self._build()
 
-    # =====================================================================
-    #  BUILD
-    # =====================================================================
-
     def _build(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # ── scrollable config area ─────────────────────────────────────
         self._scroll = QScrollArea(self)
         self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setFrameShape(QFrame.Shape.NoFrame)
 
         self._scroll_widget = QWidget(self._scroll)
@@ -95,7 +60,6 @@ class LeftPanel(QWidget):
         self._inner_layout.setContentsMargins(10, 12, 10, 12)
         self._inner_layout.setSpacing(10)
 
-        # build the four section groups into the scrollable area
         self._build_model_section()
         self._build_ocr_section()
         self._build_detection_section()
@@ -104,13 +68,9 @@ class LeftPanel(QWidget):
 
         root.addWidget(self._scroll, 1)
 
-        # ── fixed bottom strip (always visible, outside scroll) ────────
         self._build_bottom(root)
 
-        # Apply initial theme styles
         self._apply_theme_styles()
-
-    # ── section builders ─────────────────────────────────────────────────
 
     def _build_model_section(self) -> None:
         self._box_model = SectionGroup("Model", self._scroll_widget)
@@ -194,10 +154,7 @@ class LeftPanel(QWidget):
         self._conf_hdr_row.addWidget(self._conf_val_lbl)
         lay.addLayout(self._conf_hdr_row)
 
-        # NoScrollSlider — ignores wheel events inside scroll area
-        self.conf_slider = NoScrollSlider(
-            Qt.Orientation.Horizontal, self._box_det
-        )
+        self.conf_slider = NoScrollSlider(Qt.Orientation.Horizontal, self._box_det)
         self.conf_slider.setRange(0, 100)
         self.conf_slider.setValue(25)
         self.conf_slider.valueChanged.connect(
@@ -205,9 +162,7 @@ class LeftPanel(QWidget):
         )
         lay.addWidget(self.conf_slider)
 
-        self.save_crops_check = QCheckBox(
-            "Save cropped detections", self._box_det
-        )
+        self.save_crops_check = QCheckBox("Save cropped detections", self._box_det)
         self.save_crops_check.setChecked(True)
         lay.addWidget(self.save_crops_check)
 
@@ -239,7 +194,6 @@ class LeftPanel(QWidget):
         self._inner_layout.addWidget(self._box_inp)
 
     def _build_bottom(self, root: QVBoxLayout) -> None:
-        """Pinned bottom strip — always visible regardless of scroll."""
         self._bottom = QWidget(self)
         self._bottom_lay = QVBoxLayout(self._bottom)
         self._bottom_lay.setContentsMargins(10, 8, 10, 10)
@@ -274,7 +228,6 @@ class LeftPanel(QWidget):
     # ── inline theme styles ──────────────────────────────────────────────
 
     def _apply_theme_styles(self) -> None:
-        """(Re-)apply all inline, theme-dependent styles."""
         self._scroll.setStyleSheet(
             f"QScrollArea {{ background: {COLORS['bg']}; border: none; }}"
         )
@@ -298,8 +251,7 @@ class LeftPanel(QWidget):
             f"background:transparent;border:none;"
         )
         self._bottom.setStyleSheet(
-            f"background:{COLORS['surface']};"
-            f"border-top:1px solid {COLORS['border']};"
+            f"background:{COLORS['surface']};border-top:1px solid {COLORS['border']};"
         )
         self._hint_lbl.setStyleSheet(
             f"color:{COLORS['warning']};"
@@ -308,10 +260,6 @@ class LeftPanel(QWidget):
             f"border:none;"
             f"padding:2px 0;"
         )
-
-    # =====================================================================
-    #  SLOTS / HELPERS
-    # =====================================================================
 
     def _browse_model(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -322,10 +270,6 @@ class LeftPanel(QWidget):
         )
         if path:
             self.model_path_edit.setText(path)
-
-    # =====================================================================
-    #  PUBLIC API  (called by MainWindow)
-    # =====================================================================
 
     @property
     def model_path(self) -> str:
@@ -367,21 +311,16 @@ class LeftPanel(QWidget):
             self._hint_lbl.hide()
 
     def setInteractable(self, enabled: bool) -> None:
-        """Bulk enable / disable all control buttons (used during loading)."""
         self.btn_load_model.setEnabled(enabled)
         self.btn_load_ocr.setEnabled(enabled)
         self.btn_add_files.setEnabled(enabled)
         self.btn_add_folder.setEnabled(enabled)
         self.btn_clear.setEnabled(enabled)
         self._browse_btn.setEnabled(enabled)
-        # Run / Export stay managed by setRunnable / setExportable
 
     def refresh_theme(self) -> None:
-        """Re-apply all inline theme styles after a theme toggle."""
         self._apply_theme_styles()
-        # Child widgets with their own refresh_theme
-        for box in (self._box_model, self._box_ocr,
-                     self._box_det, self._box_inp):
+        for box in (self._box_model, self._box_ocr, self._box_det, self._box_inp):
             box.refresh_theme()
         self.model_badge.refresh_theme()
         self.ocr_badge.refresh_theme()

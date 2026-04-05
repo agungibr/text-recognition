@@ -1,16 +1,15 @@
-"""
-ui/panel_log.py
-───────────────
-Bottom log panel — timestamped event list.
-"""
-
 from datetime import datetime
 
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QListWidget, QListWidgetItem,
-)
 from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ui.theme import COLORS
 
@@ -43,8 +42,6 @@ class LogPanel(QWidget):
 
         self._apply_theme_styles()
 
-    # ── inline theme styles ──────────────────────────────────────────────
-
     def _apply_theme_styles(self) -> None:
         self._hdr_lbl.setStyleSheet(
             f"color:{COLORS['text_muted']};"
@@ -53,12 +50,12 @@ class LogPanel(QWidget):
         self._clear_btn.setStyleSheet(f"""
             QPushButton {{
                 background: transparent;
-                color: {COLORS['text_muted']};
+                color: {COLORS["text_muted"]};
                 border: none;
                 font-size: 11px;
             }}
             QPushButton:hover {{
-                color: {COLORS['text_secondary']};
+                color: {COLORS["text_secondary"]};
             }}
         """)
         self._log_list.setStyleSheet(f"""
@@ -75,8 +72,6 @@ class LogPanel(QWidget):
                 color: {COLORS["text_secondary"]};
             }}
         """)
-
-    # ── public API ───────────────────────────────────────────────────────
 
     def append(self, msg: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S")

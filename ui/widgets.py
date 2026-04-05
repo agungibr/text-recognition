@@ -1,25 +1,5 @@
-"""
-ui/widgets.py
-─────────────
-Reusable custom Qt widgets used across all panels.
-
-Exports:
-    NoScrollSlider – QSlider subclass that ignores wheel events
-    Badge          – coloured status pill (idle / busy / ok / error)
-    SectionLabel   – small all-caps section header label
-    ValueLabel     – monospace value display label
-    MetricCard     – bordered card showing a label + large value
-    Divider        – 1-px horizontal rule QFrame
-    ImageViewer    – aspect-ratio-preserving image display label
-    SectionGroup   – QFrame-based section container (replaces QGroupBox)
-
-Every widget that uses inline, theme-dependent styles provides a public
-``refresh_theme()`` method.  Call it after ``ThemeManager.toggle()`` to
-re-apply colours without rebuilding the widget tree.
-"""
-
 import cv2
-from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QFrame,
@@ -34,30 +14,12 @@ from PyQt6.QtWidgets import (
 from ui.theme import COLORS
 
 
-# ─────────────────────────────────────────────
-#  NO-SCROLL SLIDER
-# ─────────────────────────────────────────────
-
-
 class NoScrollSlider(QSlider):
-    """QSlider that ignores mouse-wheel events.
-
-    Prevents accidental value changes when the user scrolls a parent
-    QScrollArea.  The slider can still be changed by click or drag.
-    """
-
-    def wheelEvent(self, event: QEvent) -> None:      # type: ignore[override]
+    def wheelEvent(self, event: QEvent) -> None:
         event.ignore()
 
 
-# ─────────────────────────────────────────────
-#  BADGE
-# ─────────────────────────────────────────────
-
-
 class Badge(QLabel):
-    """Coloured pill widget that reflects a named state."""
-
     def __init__(self, state: str = "idle", text: str = "", parent=None):
         super().__init__(parent)
         self._state = state
@@ -66,12 +28,11 @@ class Badge(QLabel):
 
     @staticmethod
     def _style_for(state: str) -> tuple[str, str, str]:
-        """Return (fg, bg, icon) for the given *state*."""
         styles = {
-            "ok":    (COLORS["success"],    COLORS["success_dim"], "●"),
-            "idle":  (COLORS["text_muted"], COLORS["surface3"],    "○"),
-            "busy":  (COLORS["warning"],    COLORS["warning_dim"], "◌"),
-            "error": (COLORS["error"],      COLORS["error_dim"],   "✕"),
+            "ok": (COLORS["success"], COLORS["success_dim"], "●"),
+            "idle": (COLORS["text_muted"], COLORS["surface3"], "○"),
+            "busy": (COLORS["warning"], COLORS["warning_dim"], "◌"),
+            "error": (COLORS["error"], COLORS["error_dim"], "✕"),
         }
         return styles.get(state, styles["idle"])
 
@@ -101,14 +62,7 @@ class Badge(QLabel):
         self._apply_style()
 
 
-# ─────────────────────────────────────────────
-#  SECTION LABEL
-# ─────────────────────────────────────────────
-
-
 class SectionLabel(QLabel):
-    """Small all-caps muted section header."""
-
     def __init__(self, text: str, parent=None):
         super().__init__(text.upper(), parent)
         self._apply_style()
@@ -126,14 +80,7 @@ class SectionLabel(QLabel):
         self._apply_style()
 
 
-# ─────────────────────────────────────────────
-#  VALUE LABEL
-# ─────────────────────────────────────────────
-
-
 class ValueLabel(QLabel):
-    """Monospace primary-colour value display."""
-
     def __init__(self, text: str = "—", parent=None):
         super().__init__(text, parent)
         self._apply_style()
@@ -149,14 +96,7 @@ class ValueLabel(QLabel):
         self._apply_style()
 
 
-# ─────────────────────────────────────────────
-#  METRIC CARD
-# ─────────────────────────────────────────────
-
-
 class MetricCard(QFrame):
-    """Bordered card that shows a small label above a large numeric value."""
-
     def __init__(self, label: str, value: str = "—", parent=None):
         super().__init__(parent)
         self._label_text = label.upper()
@@ -200,33 +140,14 @@ class MetricCard(QFrame):
         self._apply_style()
 
 
-# ─────────────────────────────────────────────
-#  DIVIDER
-# ─────────────────────────────────────────────
-
-
 class Divider(QFrame):
-    """1-px horizontal rule that picks up the #divider stylesheet rule."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("divider")
         self.setFrameShape(QFrame.Shape.HLine)
 
 
-# ─────────────────────────────────────────────
-#  IMAGE VIEWER
-# ─────────────────────────────────────────────
-
-
 class ImageViewer(QLabel):
-    """
-    Aspect-ratio-preserving image display widget.
-
-    Accepts either a file-path string or a NumPy BGR/BGRA/grayscale array
-    via :meth:`setImage`.  Automatically rescales on resize.
-    """
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -235,10 +156,7 @@ class ImageViewer(QLabel):
         self._pix = None
         self._show_placeholder()
 
-    # ── public ───────────────────────────────
-
     def setImage(self, path_or_array) -> None:
-        """Load an image from *path_or_array* (str path or NumPy ndarray)."""
         try:
             if isinstance(path_or_array, str):
                 pix = QPixmap(path_or_array)
@@ -269,8 +187,6 @@ class ImageViewer(QLabel):
             self._apply_image_style()
         else:
             self._apply_placeholder_style()
-
-    # ── private ──────────────────────────────
 
     def _apply_image_style(self) -> None:
         self.setStyleSheet(f"""
@@ -309,33 +225,18 @@ class ImageViewer(QLabel):
         self._refresh()
 
 
-# ─────────────────────────────────────────────
-#  SECTION GROUP  (QGroupBox replacement)
-# ─────────────────────────────────────────────
-
-
 class SectionGroup(QFrame):
-    """
-    Reliable QGroupBox replacement for Fusion-styled dark-theme apps.
-
-    All internal child widgets are created with an explicit ``parent``
-    argument and stored as ``self._xxx`` attributes for GC safety.
-    """
-
     def __init__(self, title: str, parent=None):
         super().__init__(parent)
         self._title_text = title.upper()
 
-        # ── outer frame ───────────────────────────────────────────────
         self.setObjectName("sectionGroup")
         self.setFrameShape(QFrame.Shape.NoFrame)
 
-        # ── outer layout ─────────────────────────────────────────────
         self._outer_layout = QVBoxLayout(self)
         self._outer_layout.setContentsMargins(0, 0, 0, 0)
         self._outer_layout.setSpacing(0)
 
-        # ── title bar ────────────────────────────────────────────────
         self._title_bar = QWidget(self)
         self._title_bar.setObjectName("sgTitleBar")
 
@@ -347,7 +248,6 @@ class SectionGroup(QFrame):
         self._title_bar_layout.addWidget(self._title_label)
         self._outer_layout.addWidget(self._title_bar)
 
-        # ── content widget ───────────────────────────────────────────
         self._content_widget = QWidget(self)
         self._content_widget.setObjectName("sgContent")
 
@@ -357,7 +257,6 @@ class SectionGroup(QFrame):
 
         self._outer_layout.addWidget(self._content_widget)
 
-        # Apply theme styles
         self._apply_style()
 
     def _apply_style(self) -> None:
@@ -391,8 +290,6 @@ class SectionGroup(QFrame):
                 border: none;
             }
         """)
-
-    # ── public API ───────────────────────────────────────────────────
 
     def inner_layout(self) -> QVBoxLayout:
         """Return the content ``QVBoxLayout`` for adding child widgets."""

@@ -1,21 +1,3 @@
-"""
-ui/theme.py
-───────────
-Dual-theme colour system (dark / light) with persistent toggle via QSettings.
-
-Exports
-───────
-    DARK_COLORS   – frozen colour palette for dark mode
-    LIGHT_COLORS  – frozen colour palette for light mode
-    COLORS        – **mutable** dict that always reflects the active theme.
-                    Every module that does `from ui.theme import COLORS`
-                    holds a reference to the same dict object; swapping its
-                    contents via `ThemeManager.toggle()` propagates everywhere.
-    build_stylesheet(c)  – generate the full QSS string from a colour dict
-    build_palette(c)     – generate a QPalette from a colour dict
-    ThemeManager         – singleton that owns toggle / apply / QSettings logic
-"""
-
 from PyQt6.QtCore import QSettings
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import QApplication
@@ -25,62 +7,55 @@ from PyQt6.QtWidgets import QApplication
 # ═════════════════════════════════════════════════════════════════════════════
 
 DARK_COLORS: dict[str, str] = {
-    "bg":             "#0F1117",
-    "surface":        "#171B26",
-    "surface2":       "#1E2333",
-    "surface3":       "#252B3B",
-    "border":         "#2A3045",
-    "border_active":  "#3D4F7C",
-    "accent":         "#4B8BF4",
-    "accent_dim":     "#2D5599",
-    "accent_glow":    "#4B8BF433",
-    "accent_hover":   "#5C9BFF",
-    "success":        "#2ECC71",
-    "success_dim":    "#1A7A44",
-    "warning":        "#F39C12",
-    "warning_dim":    "#5A3D00",
-    "error":          "#E74C3C",
-    "error_dim":      "#4A1A1A",
-    "text_primary":   "#E8ECF4",
+    "bg": "#0F1117",
+    "surface": "#171B26",
+    "surface2": "#1E2333",
+    "surface3": "#252B3B",
+    "border": "#2A3045",
+    "border_active": "#3D4F7C",
+    "accent": "#4B8BF4",
+    "accent_dim": "#2D5599",
+    "accent_glow": "#4B8BF433",
+    "accent_hover": "#5C9BFF",
+    "success": "#2ECC71",
+    "success_dim": "#1A7A44",
+    "warning": "#F39C12",
+    "warning_dim": "#5A3D00",
+    "error": "#E74C3C",
+    "error_dim": "#4A1A1A",
+    "text_primary": "#E8ECF4",
     "text_secondary": "#8892A4",
-    "text_muted":     "#4A5568",
-    "highlight":      "#4B8BF420",
+    "text_muted": "#4A5568",
+    "highlight": "#4B8BF420",
 }
 
 LIGHT_COLORS: dict[str, str] = {
-    "bg":             "#F5F7FA",
-    "surface":        "#FFFFFF",
-    "surface2":       "#EDF0F5",
-    "surface3":       "#E2E6ED",
-    "border":         "#D1D9E6",
-    "border_active":  "#A0B0C8",
-    "accent":         "#3B7CF5",
-    "accent_dim":     "#2565C7",
-    "accent_glow":    "#3B7CF520",
-    "accent_hover":   "#5090FF",
-    "success":        "#1B9E4B",
-    "success_dim":    "#D4EDDA",
-    "warning":        "#D48806",
-    "warning_dim":    "#FFF3D6",
-    "error":          "#D93025",
-    "error_dim":      "#FDE8E8",
-    "text_primary":   "#1A1D26",
+    "bg": "#F5F7FA",
+    "surface": "#FFFFFF",
+    "surface2": "#EDF0F5",
+    "surface3": "#E2E6ED",
+    "border": "#D1D9E6",
+    "border_active": "#A0B0C8",
+    "accent": "#3B7CF5",
+    "accent_dim": "#2565C7",
+    "accent_glow": "#3B7CF520",
+    "accent_hover": "#5090FF",
+    "success": "#1B9E4B",
+    "success_dim": "#D4EDDA",
+    "warning": "#D48806",
+    "warning_dim": "#FFF3D6",
+    "error": "#D93025",
+    "error_dim": "#FDE8E8",
+    "text_primary": "#1A1D26",
     "text_secondary": "#5A6577",
-    "text_muted":     "#8892A4",
-    "highlight":      "#3B7CF515",
+    "text_muted": "#8892A4",
+    "highlight": "#3B7CF515",
 }
 
-# Mutable dict — always reflects the active theme.
-# Starts as dark; ThemeManager.__init__() may swap to light if QSettings says so.
 COLORS: dict[str, str] = dict(DARK_COLORS)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  STYLESHEET BUILDER
-# ═════════════════════════════════════════════════════════════════════════════
-
 def build_stylesheet(c: dict[str, str]) -> str:
-    """Return the full application QSS using colour dict *c*."""
     return f"""
 /* ── base ──────────────────────────────────────────────── */
 QMainWindow, QWidget {{
@@ -399,12 +374,7 @@ QScrollArea {{
 """
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  PALETTE BUILDER
-# ═════════════════════════════════════════════════════════════════════════════
-
 def build_palette(c: dict[str, str]) -> QPalette:
-    """Build a QPalette that matches the colour dict *c*."""
     pal = QPalette()
     pal.setColor(QPalette.ColorRole.Window, QColor(c["bg"]))
     pal.setColor(QPalette.ColorRole.WindowText, QColor(c["text_primary"]))
@@ -420,30 +390,20 @@ def build_palette(c: dict[str, str]) -> QPalette:
     return pal
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  THEME MANAGER
-# ═════════════════════════════════════════════════════════════════════════════
-
 class ThemeManager:
-    """Owns the current theme state.  Persists choice via QSettings."""
-
     def __init__(self) -> None:
         self._settings = QSettings("YOLOxOCR", "DetectionSuite")
         saved = self._settings.value("theme/mode", "dark")
         self._is_dark: bool = saved != "light"
-        # Swap COLORS in-place to match the persisted theme.
         src = DARK_COLORS if self._is_dark else LIGHT_COLORS
         COLORS.clear()
         COLORS.update(src)
-
-    # ── public API ────────────────────────────────────────────────────────
 
     @property
     def is_dark(self) -> bool:
         return self._is_dark
 
     def toggle(self) -> None:
-        """Swap dark ↔ light and persist the choice."""
         self._is_dark = not self._is_dark
         src = DARK_COLORS if self._is_dark else LIGHT_COLORS
         COLORS.clear()
@@ -451,10 +411,8 @@ class ThemeManager:
         self._settings.setValue("theme/mode", "dark" if self._is_dark else "light")
 
     def apply(self, app: QApplication) -> None:
-        """Apply the current theme's QSS + palette to *app*."""
         app.setStyleSheet(build_stylesheet(COLORS))
         app.setPalette(build_palette(COLORS))
 
 
-# Back-compat: pre-built stylesheet for the initial (dark) theme.
 STYLESHEET = build_stylesheet(COLORS)

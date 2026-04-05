@@ -1,22 +1,9 @@
-"""
-ui/main_window.py
-─────────────────
-Application main window – wires together all panels, manages model/OCR
-loading, inference dispatch, theme toggling, and the export workflow.
-
-Key changes vs. the original:
-  • ThemeManager integration with ☀/🌙 toggle button + QSettings persistence.
-  • Loading UX: WaitCursor, indeterminate progress bar, bulk-disable buttons.
-  • Auto-load OCR after YOLO model loads (skips if already loaded).
-  • Full refresh_theme() cascade on toggle.
-"""
-
 import os
 import sys
 import zipfile
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QTimer, QCoreApplication
+from PyQt6.QtCore import QCoreApplication, Qt, QTimer
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import (
     QApplication,
@@ -48,7 +35,7 @@ from ui.widgets import Badge
 class MainWindow(QMainWindow):
     def __init__(self, theme_mgr: ThemeManager):
         super().__init__()
-        self.setWindowTitle("YOLO · OCR  —  Detection Suite")
+        self.setWindowTitle("Text Detection")
         self.resize(1280, 820)
         self.setMinimumSize(900, 600)
 
@@ -136,9 +123,7 @@ class MainWindow(QMainWindow):
         lay.addSpacing(12)
 
         # ── Theme toggle button ──────────────────────────────────────
-        self._theme_btn = QPushButton(
-            "☀" if self._theme_mgr.is_dark else "🌙"
-        )
+        self._theme_btn = QPushButton("☀" if self._theme_mgr.is_dark else "🌙")
         self._theme_btn.setObjectName("themeToggle")
         self._theme_btn.setToolTip("Toggle light / dark theme")
         self._theme_btn.setFixedSize(32, 32)
@@ -197,8 +182,7 @@ class MainWindow(QMainWindow):
 
     def _apply_log_wrap_style(self) -> None:
         self._log_wrap.setStyleSheet(
-            f"background:{COLORS['surface']};"
-            f"border-top:1px solid {COLORS['border']};"
+            f"background:{COLORS['surface']};border-top:1px solid {COLORS['border']};"
         )
 
     # ═════════════════════════════════════════════════════════════════════
@@ -226,7 +210,7 @@ class MainWindow(QMainWindow):
         if loading and not self._is_loading:
             self._is_loading = True
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            self._progress_bar.setRange(0, 0)   # indeterminate pulse
+            self._progress_bar.setRange(0, 0)  # indeterminate pulse
             self.left.setInteractable(False)
         elif not loading and self._is_loading:
             self._is_loading = False
@@ -247,9 +231,7 @@ class MainWindow(QMainWindow):
         self._theme_mgr.apply(app)
 
         # Update toggle icon
-        self._theme_btn.setText(
-            "☀" if self._theme_mgr.is_dark else "🌙"
-        )
+        self._theme_btn.setText("☀" if self._theme_mgr.is_dark else "🌙")
 
         # Cascade refresh to all inline-styled widgets
         self._apply_topbar_style()
@@ -310,9 +292,7 @@ class MainWindow(QMainWindow):
         self.left.model_badge.setState("busy", "Loading…")
         self._model_badge.setState("busy", "Model")
         self._progress_lbl.setText("⏳ Loading YOLO model…")
-        self._post_status(
-            f"Loading YOLO model — {os.path.basename(path)} …"
-        )
+        self._post_status(f"Loading YOLO model — {os.path.basename(path)} …")
 
         self._model_loader = ModelLoader("yolo", model_path=path)
         self._model_loader.done.connect(self._on_loader_done)
@@ -344,7 +324,7 @@ class MainWindow(QMainWindow):
 
             # ── Auto-load OCR after model (requirement #4) ────────────
             if self._reader is None:
-                self._load_ocr()       # stays in loading state
+                self._load_ocr()  # stays in loading state
             else:
                 self._set_loading_state(False)
 
@@ -381,9 +361,7 @@ class MainWindow(QMainWindow):
             return
 
         new_entries = collect_files_from_paths(paths)
-        existing = {
-            f["path"] for f in self._files if f.get("type") == "path"
-        }
+        existing = {f["path"] for f in self._files if f.get("type") == "path"}
         added = [e for e in new_entries if e["path"] not in existing]
 
         self._files.extend(added)
@@ -397,9 +375,7 @@ class MainWindow(QMainWindow):
             return
 
         new_entries = collect_files_from_folder(folder)
-        existing = {
-            f["path"] for f in self._files if f.get("type") == "path"
-        }
+        existing = {f["path"] for f in self._files if f.get("type") == "path"}
         added = [e for e in new_entries if e["path"] not in existing]
 
         self._files.extend(added)
@@ -475,9 +451,7 @@ class MainWindow(QMainWindow):
         if results:
             self.right.showResult(results[0])
 
-        self._post_status(
-            f"Detection complete — {len(results)} image(s) processed."
-        )
+        self._post_status(f"Detection complete — {len(results)} image(s) processed.")
         self._update_run_state()
 
     def _on_inference_error(self, msg: str) -> None:
@@ -492,14 +466,10 @@ class MainWindow(QMainWindow):
 
     def _export(self) -> None:
         if not self._output_dir or not os.path.isdir(self._output_dir):
-            QMessageBox.warning(
-                self, "Nothing to export", "No output directory found."
-            )
+            QMessageBox.warning(self, "Nothing to export", "No output directory found.")
             return
 
-        default_name = (
-            f"detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-        )
+        default_name = f"detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         save_path, _ = QFileDialog.getSaveFileName(
             self,
             "Export results",
@@ -514,9 +484,7 @@ class MainWindow(QMainWindow):
                 for dirpath, _dirs, filenames in os.walk(self._output_dir):
                     for fname in filenames:
                         abs_path = os.path.join(dirpath, fname)
-                        arc_name = os.path.relpath(
-                            abs_path, self._output_dir
-                        )
+                        arc_name = os.path.relpath(abs_path, self._output_dir)
                         zf.write(abs_path, arc_name)
             self._post_status(f"Exported → {save_path}")
         except Exception as exc:
@@ -527,6 +495,7 @@ class MainWindow(QMainWindow):
 #  DPI SETUP
 # ═════════════════════════════════════════════════════════════════════════════
 
+
 def _setup_dpi() -> None:
     """Configure High-DPI scaling before QApplication is created."""
     os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
@@ -536,6 +505,7 @@ def _setup_dpi() -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ═════════════════════════════════════════════════════════════════════════════
+
 
 def launch() -> None:
     """Create the QApplication, apply theme, show the window, and run."""

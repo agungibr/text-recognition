@@ -1,20 +1,21 @@
-"""
-ui/panel_right.py
-─────────────────
-Right panel — detection results, metrics, and crop thumbnails.
-"""
-
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QTableWidget, QTableWidgetItem,
-    QScrollArea, QStackedWidget, QHeaderView,
-    QAbstractItemView, QSizePolicy,
-)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ui.theme import COLORS
-from ui.widgets import MetricCard, Divider, ImageViewer
+from ui.widgets import Divider, ImageViewer, MetricCard
 
 
 class RightPanel(QWidget):
@@ -113,21 +114,15 @@ class RightPanel(QWidget):
         table.setColumnWidth(3, 90)
 
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.verticalHeader().setVisible(False)
         table.setShowGrid(False)
         table.setAlternatingRowColors(False)
 
         return table
 
-    # ── inline theme styles ──────────────────────────────────────────────
-
     def _apply_placeholder_style(self) -> None:
-        self._placeholder.setStyleSheet(
-            f"background:{COLORS['surface']};"
-        )
+        self._placeholder.setStyleSheet(f"background:{COLORS['surface']};")
         self._placeholder_lbl.setStyleSheet(
             f"color:{COLORS['text_muted']};font-size:12px;line-height:1.6;"
         )
@@ -143,11 +138,8 @@ class RightPanel(QWidget):
         self._crops_hdr_lbl.setStyleSheet(_muted)
 
         self._det_count_lbl.setStyleSheet(
-            f"color:{COLORS['accent']};"
-            f"font-size:11px;font-family:'Consolas',monospace;"
+            f"color:{COLORS['accent']};font-size:11px;font-family:'Consolas',monospace;"
         )
-
-    # ── public API ───────────────────────────────────────────────────────
 
     def showResult(self, result: dict) -> None:
         dets: list[dict] = result.get("detections", [])
@@ -169,19 +161,19 @@ class RightPanel(QWidget):
             self._table.insertRow(row)
 
             self._table.setItem(
-                row, 0,
+                row,
+                0,
                 self._cell(f"{det['id']:02d}", Qt.AlignmentFlag.AlignCenter),
             )
             self._table.setItem(row, 1, self._cell(det["text"] or "—"))
 
-            conf_item = self._cell(
-                f"{det['conf']:.2f}", Qt.AlignmentFlag.AlignCenter
-            )
+            conf_item = self._cell(f"{det['conf']:.2f}", Qt.AlignmentFlag.AlignCenter)
             conf_item.setForeground(self._conf_color(det["conf"]))
             self._table.setItem(row, 2, conf_item)
 
             self._table.setItem(
-                row, 3,
+                row,
+                3,
                 self._cell(
                     f"{det['w']:.0f}×{det['h']:.0f}",
                     Qt.AlignmentFlag.AlignCenter,
@@ -195,14 +187,10 @@ class RightPanel(QWidget):
             if arr is not None:
                 thumb = ImageViewer()
                 thumb.setFixedSize(120, 120)
-                thumb.setSizePolicy(
-                    QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-                )
+                thumb.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
                 thumb.setImage(arr)
                 thumb.setToolTip(det.get("text", ""))
-                self._crops_layout.insertWidget(
-                    self._crops_layout.count() - 1, thumb
-                )
+                self._crops_layout.insertWidget(self._crops_layout.count() - 1, thumb)
 
         self.stack.setCurrentIndex(1)
 
@@ -215,7 +203,6 @@ class RightPanel(QWidget):
         self.stack.setCurrentIndex(0)
 
     def refresh_theme(self) -> None:
-        """Re-apply inline theme styles after a theme toggle."""
         self._apply_placeholder_style()
         self._apply_results_style()
         self._card_total.refresh_theme()

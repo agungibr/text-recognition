@@ -1,24 +1,23 @@
-"""
-ui/panel_center.py
-──────────────────
-Centre panel — file queue list + image preview.
-"""
-
 import io
 import tempfile
-
 from pathlib import Path
 
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QLabel, QListWidget, QListWidgetItem, QSizePolicy,
-)
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QSizePolicy,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
 
+from core.file_utils import load_dicom_as_bgr
 from ui.theme import COLORS
 from ui.widgets import ImageViewer
-from core.file_utils import load_dicom_as_bgr
 
 
 class CenterPanel(QWidget):
@@ -87,8 +86,6 @@ class CenterPanel(QWidget):
         self._apply_preview_style()
         return self._preview_pane
 
-    # ── inline theme styles ──────────────────────────────────────────────
-
     def _apply_queue_style(self) -> None:
         self._queue_pane.setStyleSheet(
             f"background:{COLORS['surface']};"
@@ -109,8 +106,6 @@ class CenterPanel(QWidget):
             f"color:{COLORS['text_secondary']};"
             f"font-size:11px;font-family:'Consolas',monospace;"
         )
-
-    # ── public API ───────────────────────────────────────────────────────
 
     def setFiles(self, files: list[dict]) -> None:
         self._files = files
@@ -139,12 +134,9 @@ class CenterPanel(QWidget):
         self._results.clear()
 
     def refresh_theme(self) -> None:
-        """Re-apply inline theme styles after a theme toggle."""
         self._apply_queue_style()
         self._apply_preview_style()
         self.image_viewer.refresh_theme()
-
-    # ── private ──────────────────────────────────────────────────────────
 
     def _on_item_changed(
         self,

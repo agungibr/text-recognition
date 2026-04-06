@@ -13,11 +13,9 @@ from PyQt6.QtWidgets import (
 
 from ui.theme import COLORS
 
-
 class NoScrollSlider(QSlider):
     def wheelEvent(self, event: QEvent) -> None:
         event.ignore()
-
 
 class Badge(QLabel):
     def __init__(self, state: str = "idle", text: str = "", parent=None):
@@ -61,7 +59,6 @@ class Badge(QLabel):
     def refresh_theme(self) -> None:
         self._apply_style()
 
-
 class SectionLabel(QLabel):
     def __init__(self, text: str, parent=None):
         super().__init__(text.upper(), parent)
@@ -79,7 +76,6 @@ class SectionLabel(QLabel):
     def refresh_theme(self) -> None:
         self._apply_style()
 
-
 class ValueLabel(QLabel):
     def __init__(self, text: str = "—", parent=None):
         super().__init__(text, parent)
@@ -94,7 +90,6 @@ class ValueLabel(QLabel):
 
     def refresh_theme(self) -> None:
         self._apply_style()
-
 
 class MetricCard(QFrame):
     def __init__(self, label: str, value: str = "—", parent=None):
@@ -139,13 +134,11 @@ class MetricCard(QFrame):
     def refresh_theme(self) -> None:
         self._apply_style()
 
-
 class Divider(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("divider")
         self.setFrameShape(QFrame.Shape.HLine)
-
 
 class ImageViewer(QLabel):
     def __init__(self, parent=None):
@@ -223,7 +216,6 @@ class ImageViewer(QLabel):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._refresh()
-
 
 class SectionGroup(QFrame):
     def __init__(self, title: str, parent=None):

@@ -121,8 +121,7 @@ class DicomHandler:
         arr_f = arr.astype(np.float32)
         low = wc - (ww / 2.0)
         high = wc + (ww / 2.0)
-        arr_f = np.clip(arr_f, low, high)
-        return arr_f
+        return np.clip(arr_f, low, high)
 
     @staticmethod
     def _normalize_to_uint8(arr: np.ndarray) -> np.ndarray:
@@ -149,10 +148,126 @@ class DicomHandler:
         return cv2.cvtColor(arr.astype(np.uint8), cv2.COLOR_GRAY2BGR)
 
     @staticmethod
+    def _overlay_style(image: np.ndarray) -> dict:
+        """Compute dynamic overlay text style based on image resolution."""
+        h, w = image.shape[:2]
+        base = float(max(1, min(h, w)))
+        font_scale = max(0.42, min(0.95, base / 1200.0))
+        thickness = 1 if font_scale < 0.7 else 2
+        line_gap = max(6, int(10 * font_scale))
+        pad_x = max(7, int(12 * font_scale))
+        pad_y = max(6, int(10 * font_scale))
+        margin = max(10, int(16 * font_scale))
+        return {
+            "font": cv2.FONT_HERSHEY_SIMPLEX,
+            "font_scale": font_scale,
+            "thickness": thickness,
+            "line_gap": line_gap,
+            "pad_x": pad_x,
+            "pad_y": pad_y,
+            "margin": margin,
+        }
+
+    @staticmethod
+    def _block_size(
+        image: np.ndarray,
+        lines: list[str],
+        font_scale: Optional[float] = None,
+        thickness: Optional[int] = None,
+    ) -> tuple[int, int]:
+        """Calculate text block width/height for layout placement."""
+        style = DicomHandler._overlay_style(image)
+        font = style["font"]
+        fs = font_scale if font_scale is not None else style["font_scale"]
+        th = thickness if thickness is not None else style["thickness"]
+        line_gap = style["line_gap"]
+        pad_x = style["pad_x"]
+        pad_y = style["pad_y"]
+
+        filtered = [line for line in lines if line]
+        if not filtered:
+            return 0, 0
+
+        widths = []
+        heights = []
+        for line in filtered:
+            (tw, th_line), _ = cv2.getTextSize(line, font, fs, th)
+            widths.append(tw)
+            heights.append(th_line)
+
+        max_w = max(widths)
+        max_h = max(heights)
+        line_step = max_h + line_gap
+        block_w = max_w + (2 * pad_x)
+        block_h = (2 * pad_y) + (line_step * len(filtered)) - line_gap
+        return int(block_w), int(block_h)
+
+    @staticmethod
+    def draw_text_block(
+        image: np.ndarray,
+        lines: list[str],
+        x: int,
+        y: int,
+        align_right: bool = False,
+        font_scale: Optional[float] = None,
+        thickness: Optional[int] = None,
+    ) -> np.ndarray:
+        """
+        Draw a grouped multi-line text block with solid black background.
+        """
+        if image is None or image.size == 0:
+            return image
+
+        filtered = [line for line in lines if line]
+        if not filtered:
+            return image
+
+        style = DicomHandler._overlay_style(image)
+        font = style["font"]
+        fs = font_scale if font_scale is not None else style["font_scale"]
+        th = thickness if thickness is not None else style["thickness"]
+        line_gap = style["line_gap"]
+        pad_x = style["pad_x"]
+        pad_y = style["pad_y"]
+        margin = style["margin"]
+
+        h, w = image.shape[:2]
+        block_w, block_h = DicomHandler._block_size(image, filtered, fs, th)
+        if block_w <= 0 or block_h <= 0:
+            return image
+
+        x1 = x - block_w if align_right else x
+        x1 = max(margin, min(x1, w - block_w - margin))
+        y1 = max(margin, min(y, h - block_h - margin))
+        x2 = x1 + block_w
+        y2 = y1 + block_h
+
+        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 0), -1)
+
+        line_sizes = [cv2.getTextSize(line, font, fs, th)[0] for line in filtered]
+        max_text_h = max(sz[1] for sz in line_sizes)
+        line_step = max_text_h + line_gap
+        text_y = y1 + pad_y + max_text_h
+        text_x = x1 + pad_x
+
+        for line in filtered:
+            cv2.putText(
+                image,
+                line,
+                (text_x, text_y),
+                font,
+                fs,
+                (255, 255, 255),
+                th,
+                cv2.LINE_AA,
+            )
+            text_y += line_step
+
+        return image
+
+    @staticmethod
     def extract_metadata_from_dataset(ds: Any) -> dict:
-        """
-        Extract patient and study metadata from a loaded pydicom dataset.
-        """
+        """Extract patient and study metadata from a loaded pydicom dataset."""
         metadata = {
             "patient_id": "",
             "patient_name": "",
@@ -228,181 +343,141 @@ class DicomHandler:
 
     @staticmethod
     def extract_metadata(path: str) -> dict:
-        """
-        Extract patient and study metadata from a DICOM file path.
-        """
+        """Extract patient and study metadata from a DICOM file path."""
+        empty = {
+            "patient_id": "",
+            "patient_name": "",
+            "patient_birth_date": "",
+            "patient_birth_date_formatted": "",
+            "patient_sex": "",
+            "patient_sex_formatted": "",
+            "patient_age": "",
+            "study_date": "",
+            "study_date_formatted": "",
+            "study_description": "",
+            "series_description": "",
+            "modality": "",
+            "institution": "",
+            "referring_physician": "",
+            "accession_number": "",
+            "rows": 0,
+            "columns": 0,
+        }
         try:
             ds = pydicom.dcmread(path, force=True)
             return DicomHandler.extract_metadata_from_dataset(ds)
         except Exception:
-            return {
-                "patient_id": "",
-                "patient_name": "",
-                "patient_birth_date": "",
-                "patient_birth_date_formatted": "",
-                "patient_sex": "",
-                "patient_sex_formatted": "",
-                "patient_age": "",
-                "study_date": "",
-                "study_date_formatted": "",
-                "study_description": "",
-                "series_description": "",
-                "modality": "",
-                "institution": "",
-                "referring_physician": "",
-                "accession_number": "",
-                "rows": 0,
-                "columns": 0,
-            }
-
-    @staticmethod
-    def _draw_overlay_line(
-        image: np.ndarray,
-        text: str,
-        x_anchor: int,
-        y_baseline: int,
-        font: int,
-        font_scale: float,
-        thickness: int,
-        align_right: bool = False,
-    ) -> None:
-        """Draw one text line with a dark background and subtle shadow."""
-        if not text:
-            return
-
-        h, w = image.shape[:2]
-        margin = 8
-        bg_pad_x = 5
-        bg_pad_y = 4
-
-        (text_w, text_h), baseline = cv2.getTextSize(text, font, font_scale, thickness)
-        x = x_anchor - text_w if align_right else x_anchor
-        x = max(margin, min(x, w - text_w - margin))
-
-        y = max(text_h + margin, min(y_baseline, h - margin))
-        x1 = max(0, x - bg_pad_x)
-        y1 = max(0, y - text_h - bg_pad_y)
-        x2 = min(w - 1, x + text_w + bg_pad_x)
-        y2 = min(h - 1, y + baseline + bg_pad_y)
-
-        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 0, 0), -1)
-        cv2.putText(
-            image,
-            text,
-            (x + 1, y + 1),
-            font,
-            font_scale,
-            (0, 0, 0),
-            thickness + 1,
-            cv2.LINE_AA,
-        )
-        cv2.putText(
-            image,
-            text,
-            (x, y),
-            font,
-            font_scale,
-            (245, 245, 245),
-            thickness,
-            cv2.LINE_AA,
-        )
+            return empty
 
     @staticmethod
     def render_metadata_overlay(image: np.ndarray, metadata: dict) -> np.ndarray:
-        """
-        Render MicroDicom-style metadata text directly onto image pixels.
-        """
+        """Render MicroDicom-style metadata blocks directly onto image pixels."""
         if image is None or image.size == 0:
             return image
 
         overlay = image.copy()
+        style = DicomHandler._overlay_style(overlay)
+        margin = style["margin"]
+        fs = style["font_scale"]
+        th = style["thickness"]
         h, w = overlay.shape[:2]
-
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = float(max(0.38, min(0.58, min(w, h) / 1100.0)))
-        thickness = 1
-        line_height = cv2.getTextSize("Ag", font, font_scale, thickness)[0][1] + 8
-        margin = 12
 
         top_left_lines = [
             f"Name: {metadata.get('patient_name', '')}" if metadata.get("patient_name") else "",
             f"Patient ID: {metadata.get('patient_id', '')}" if metadata.get("patient_id") else "",
-            f"DOB: {metadata.get('patient_birth_date_formatted', '')}" if metadata.get("patient_birth_date_formatted") else "",
-            f"Sex: {metadata.get('patient_sex_formatted', '') or metadata.get('patient_sex', '')}" if (metadata.get("patient_sex_formatted") or metadata.get("patient_sex")) else "",
-            f"Study Date: {metadata.get('study_date_formatted', '')}" if metadata.get("study_date_formatted") else "",
+            (
+                f"Birth Date: {metadata.get('patient_birth_date_formatted', '')}"
+                if metadata.get("patient_birth_date_formatted")
+                else ""
+            ),
+            (
+                f"Gender: {metadata.get('patient_sex_formatted', '') or metadata.get('patient_sex', '')}"
+                if (metadata.get("patient_sex_formatted") or metadata.get("patient_sex"))
+                else ""
+            ),
+            (
+                f"Study Date: {metadata.get('study_date_formatted', '')}"
+                if metadata.get("study_date_formatted")
+                else ""
+            ),
         ]
         top_left_lines = [line for line in top_left_lines if line]
 
         top_right_lines = [
             f"Institution: {metadata.get('institution', '')}" if metadata.get("institution") else "",
             f"Modality: {metadata.get('modality', '')}" if metadata.get("modality") else "",
-            f"Ref. Physician: {metadata.get('referring_physician', '')}" if metadata.get("referring_physician") else "",
-            f"Accession: {metadata.get('accession_number', '')}" if metadata.get("accession_number") else "",
+            (
+                f"Ref Physician: {metadata.get('referring_physician', '')}"
+                if metadata.get("referring_physician")
+                else ""
+            ),
+            (
+                f"Accession: {metadata.get('accession_number', '')}"
+                if metadata.get("accession_number")
+                else ""
+            ),
         ]
         top_right_lines = [line for line in top_right_lines if line]
 
-        bottom_left_lines = [
-            f"Study: {metadata.get('study_description', '')}" if metadata.get("study_description") else "",
-            f"Series: {metadata.get('series_description', '')}" if metadata.get("series_description") else "",
-            f"Age: {metadata.get('patient_age', '')}" if metadata.get("patient_age") else "",
-        ]
-        bottom_left_lines = [line for line in bottom_left_lines if line]
+        bottom_left_lines = []
+        if metadata.get("study_description"):
+            bottom_left_lines.append(f"Study: {metadata.get('study_description', '')}")
+        if metadata.get("series_description"):
+            bottom_left_lines.append(f"Series: {metadata.get('series_description', '')}")
+        if metadata.get("patient_age"):
+            bottom_left_lines.append(f"Age: {metadata.get('patient_age', '')}")
 
         bottom_right_lines = [f"Size: {w} x {h}"]
         if metadata.get("rows") and metadata.get("columns"):
             bottom_right_lines.append(
-                f"DICOM Matrix: {metadata.get('columns')} x {metadata.get('rows')}"
+                f"Matrix: {metadata.get('columns')} x {metadata.get('rows')}"
             )
 
-        y = margin + line_height
-        for line in top_left_lines:
-            DicomHandler._draw_overlay_line(
-                overlay, line, margin, y, font, font_scale, thickness, align_right=False
-            )
-            y += line_height
-
-        y = margin + line_height
-        for line in top_right_lines:
-            DicomHandler._draw_overlay_line(
+        if top_left_lines:
+            DicomHandler.draw_text_block(
                 overlay,
-                line,
-                w - margin,
-                y,
-                font,
-                font_scale,
-                thickness,
-                align_right=True,
+                top_left_lines,
+                x=margin,
+                y=margin,
+                align_right=False,
+                font_scale=fs,
+                thickness=th,
             )
-            y += line_height
+
+        if top_right_lines:
+            DicomHandler.draw_text_block(
+                overlay,
+                top_right_lines,
+                x=w - margin,
+                y=margin,
+                align_right=True,
+                font_scale=fs,
+                thickness=th,
+            )
 
         if bottom_left_lines:
-            y = h - margin - (line_height * (len(bottom_left_lines) - 1))
-            for line in bottom_left_lines:
-                DicomHandler._draw_overlay_line(
-                    overlay,
-                    line,
-                    margin,
-                    y,
-                    font,
-                    font_scale,
-                    thickness,
-                    align_right=False,
-                )
-                y += line_height
-
-        y = h - margin - (line_height * (len(bottom_right_lines) - 1))
-        for line in bottom_right_lines:
-            DicomHandler._draw_overlay_line(
+            _, block_h = DicomHandler._block_size(overlay, bottom_left_lines, fs, th)
+            DicomHandler.draw_text_block(
                 overlay,
-                line,
-                w - margin,
-                y,
-                font,
-                font_scale,
-                thickness,
-                align_right=True,
+                bottom_left_lines,
+                x=margin,
+                y=max(margin, h - margin - block_h),
+                align_right=False,
+                font_scale=fs,
+                thickness=th,
             )
-            y += line_height
+
+        if bottom_right_lines:
+            _, block_h = DicomHandler._block_size(overlay, bottom_right_lines, fs, th)
+            DicomHandler.draw_text_block(
+                overlay,
+                bottom_right_lines,
+                x=w - margin,
+                y=max(margin, h - margin - block_h),
+                align_right=True,
+                font_scale=fs,
+                thickness=th,
+            )
 
         return overlay
 
@@ -516,6 +591,4 @@ class DicomHandler:
     @staticmethod
     def is_supported(path: str) -> bool:
         """Check if a file can be loaded as an image."""
-        if not Path(path).exists():
-            return False
-        return True
+        return Path(path).exists()

@@ -1,527 +1,621 @@
 import os
 import sys
-import zipfile
-from datetime import datetime
+from pathlib import Path
 
-from PyQt6.QtCore import QCoreApplication, Qt, QTimer
-from PyQt6.QtGui import QColor, QPalette
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QSize, Qt, QThread, Signal, Slot
+from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStatusBar,
     QVBoxLayout,
     QWidget,
 )
 
-from core.file_utils import collect_files_from_folder, collect_files_from_paths
-from core.inference import InferenceWorker
-from core.model_loader import ModelLoader
-from ui.panel_center import CenterPanel
-from ui.panel_left import LeftPanel
-from ui.panel_log import LogPanel
-from ui.panel_right import RightPanel
-from ui.theme import COLORS, ThemeManager, build_palette, build_stylesheet
-from ui.widgets import Badge
+from core.data_matcher import DataMatcher
+from core.dicom_handler import DicomHandler
+from core.dose_calculator import DoseCalculator
+from services.database_service import DatabaseService
+from ui.panels.bottom_panel import BottomPanel
+from ui.panels.center_panel import CenterPanel
+from ui.panels.left_panel import LeftPanel
+from ui.panels.right_panel import RightPanel
+from ui.theme import COLORS, ThemeManager
+
+
+class ModelLoaderThread(QThread):
+    """Background thread for loading AI models."""
+
+    progress = Signal(str, int)
+    loaded = Signal(object, str)
+    error = Signal(str)
+
+    def __init__(self, model_type, model_path=None, languages=None, parent=None):
+        super().__init__(parent)
+        self.model_type = model_type
+        self.model_path = model_path
+        self.languages = languages or ["en", "id"]
+
+    def run(self):
+        try:
+            if self.model_type == "yolo":
+                self.progress.emit("Loading YOLO model...", 0)
+                from ultralytics import YOLO
+
+                model = YOLO(self.model_path)
+                self.progress.emit("YOLO model ready", 100)
+                self.loaded.emit(model, "yolo")
+            elif self.model_type == "ocr":
+                self.progress.emit("Loading OCR engine...", 0)
+                import easyocr
+
+                reader = easyocr.Reader(self.languages, gpu=False)
+                self.progress.emit("OCR engine ready", 100)
+                self.loaded.emit(reader, "ocr")
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class InferenceThread(QThread):
+    """Background thread for running inference."""
+
+    progress = Signal(int, str)
+    result = Signal(object)
+    error = Signal(str)
+
+    def __init__(self, yolo_model, ocr_reader, image_path, conf=0.25, parent=None):
+        super().__init__(parent)
+        self.yolo_model = yolo_model
+        self.ocr_reader = ocr_reader
+        self.image_path = image_path
+        self.conf = conf
+
+    def run(self):
+        try:
+            import cv2
+
+            self.progress.emit(10, "Loading image...")
+
+            image = DicomHandler.load_image(self.image_path)
+            if image is None:
+                raise ValueError(f"Failed to load image: {self.image_path}")
+
+            patient_info = DicomHandler.get_patient_info(self.image_path)
+            self.progress.emit(20, "Extracting metadata...")
+
+            temp_png = None
+            if self.image_path.lower().endswith((".dcm", ".dicom")):
+                temp_png = DicomHandler.dicom_to_temp_png(self.image_path)
+                source = temp_png
+            else:
+                source = self.image_path
+
+            self.progress.emit(30, "Running text detection...")
+            results = self.yolo_model.predict(
+                source=source, conf=self.conf, verbose=False
+            )
+
+            detections = []
+            orig_img = None
+            if results and len(results) > 0:
+                result = results[0]
+                orig_img = result.orig_img
+                for i, box in enumerate(result.boxes):
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    xc, yc, w, h = box.xywh[0].tolist()
+                    conf_val = float(box.conf[0])
+                    detections.append(
+                        {
+                            "id": i,
+                            "xyxy": [int(x1), int(y1), int(x2), int(y2)],
+                            "xywh": [xc, yc, w, h],
+                            "conf": conf_val,
+                            "text": "",
+                        }
+                    )
+
+            self.progress.emit(50, f"Found {len(detections)} text regions")
+
+            for i, det in enumerate(detections):
+                x1, y1, x2, y2 = det["xyxy"]
+                h_img, w_img = (
+                    orig_img.shape[:2] if orig_img is not None else image.shape[:2]
+                )
+                x1 = max(0, min(x1, w_img - 1))
+                y1 = max(0, min(y1, h_img - 1))
+                x2 = max(x1 + 1, min(x2, w_img))
+                y2 = max(y1 + 1, min(y2, h_img))
+                crop = (
+                    orig_img[y1:y2, x1:x2]
+                    if orig_img is not None
+                    else image[y1:y2, x1:x2]
+                )
+                if crop.size > 0:
+                    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                    ocr_texts = self.ocr_reader.readtext(crop_rgb, detail=0)
+                    det["text"] = " ".join(ocr_texts)
+                pct = 50 + int((i + 1) / len(detections) * 40) if detections else 70
+                self.progress.emit(pct, f"Processing region {i + 1}/{len(detections)}")
+
+            if temp_png:
+                try:
+                    os.unlink(temp_png)
+                except OSError:
+                    pass
+
+            combined_text = " ".join(d["text"] for d in detections if d.get("text"))
+            self.progress.emit(100, "Complete")
+
+            class Result:
+                pass
+
+            result_obj = Result()
+            result_obj.image_path = self.image_path
+            result_obj.image = image
+            result_obj.detections = detections
+            result_obj.combined_text = combined_text
+            result_obj.patient_info = patient_info
+            self.result.emit(result_obj)
+
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, theme_mgr: ThemeManager):
+    """Main application window for Radiology Reader."""
+
+    def __init__(self):
         super().__init__()
-        self.setWindowTitle("Text Detection")
-        self.resize(1280, 820)
-        self.setMinimumSize(900, 600)
+        self.setWindowTitle("Radiology Reader")
+        self.resize(1400, 900)
+        self.setMinimumSize(1100, 700)
 
-        self._theme_mgr = theme_mgr
-        self._model: object = None
-        self._reader: object = None
-        self._files: list[dict] = []
-        self._results: list[dict] = []
-        self._output_dir: str | None = None
-        self._is_loading: bool = False
-
-        self._model_loader: ModelLoader | None = None
-        self._ocr_loader: ModelLoader | None = None
-        self._worker: InferenceWorker | None = None
+        self._yolo_model = None
+        self._ocr_reader = None
+        self._current_image_path = None
+        self._current_result = None
+        self._patient_csv_data = []
+        self._data_matcher = DataMatcher()
+        self._database_service = DatabaseService()
+        self._theme_mgr = ThemeManager()
 
         self._build_ui()
         self._connect_signals()
-        self._update_run_state()
+        self._apply_styles()
+        self.statusBar().showMessage("Ready to use")
+        self._auto_load_models()
 
-        # ── auto-load model if models/best.pt is pre-filled ────────────
-        if self.left.model_path and os.path.isfile(self.left.model_path):
-            QTimer.singleShot(300, self._load_model)
-
-    # ═════════════════════════════════════════════════════════════════════
-    #  BUILD UI
-    # ═════════════════════════════════════════════════════════════════════
-
-    def _build_ui(self) -> None:
+    def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(self._build_topbar())
+        self._topbar = self._create_topbar()
+        root.addWidget(self._topbar)
 
-        vsplit = QSplitter(Qt.Orientation.Vertical)
-        vsplit.setHandleWidth(1)
-        vsplit.addWidget(self._build_body())
-        vsplit.addWidget(self._build_log_wrap())
-        vsplit.setSizes([620, 130])
-        vsplit.setCollapsible(0, False)
-        vsplit.setCollapsible(1, False)
-        root.addWidget(vsplit)
+        content = self._create_content_area()
+        root.addWidget(content, 1)
+
+        self._bottom_panel = BottomPanel()
+        self._bottom_panel.setFixedHeight(180)
+        root.addWidget(self._bottom_panel)
 
         self._status_bar = QStatusBar()
+        self._status_bar.setFixedHeight(28)
         self.setStatusBar(self._status_bar)
-        self._status_bar.showMessage("Ready")
+        self._footer_label = QLabel("Size: -  |  Zoom: 100%")
+        self._footer_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px;"
+        )
+        self._status_bar.addPermanentWidget(self._footer_label)
 
-    def _build_topbar(self) -> QWidget:
-        self._topbar = QWidget()
-        self._topbar.setFixedHeight(44)
+    def _create_topbar(self):
+        from PySide6.QtWidgets import QToolBar
 
-        lay = QHBoxLayout(self._topbar)
-        lay.setContentsMargins(16, 0, 16, 0)
-        lay.setSpacing(10)
+        toolbar = QToolBar()
+        toolbar.setFixedHeight(50)
+        toolbar.setMovable(False)
 
-        self._title_lbl = QLabel("YOLO · OCR")
-        lay.addWidget(self._title_lbl)
+        title = QLabel("  Radiology Reader  ")
+        title.setStyleSheet(
+            f"color: {COLORS['accent']}; font-size: 16px; font-weight: bold;"
+        )
+        toolbar.addWidget(title)
+        toolbar.addSeparator()
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setFixedWidth(1)
-        lay.addWidget(sep)
+        self._btn_open_image = QPushButton("  Open Image")
+        self._btn_open_image.setFixedHeight(34)
+        self._btn_open_image.clicked.connect(self._on_open_image)
+        toolbar.addWidget(self._btn_open_image)
+
+        self._btn_patient_data = QPushButton("  Open Patient Data")
+        self._btn_patient_data.setFixedHeight(34)
+        self._btn_patient_data.clicked.connect(self._on_open_patient_data)
+        toolbar.addWidget(self._btn_patient_data)
+
+        self._btn_scan_text = QPushButton("  Scan Text")
+        self._btn_scan_text.setFixedHeight(34)
+        self._btn_scan_text.setObjectName("primary")
+        self._btn_scan_text.setEnabled(False)
+        self._btn_scan_text.clicked.connect(self._on_scan_text)
+        toolbar.addWidget(self._btn_scan_text)
+
+        self._btn_save_results = QPushButton("  Save Results")
+        self._btn_save_results.setFixedHeight(34)
+        self._btn_save_results.setEnabled(False)
+        self._btn_save_results.clicked.connect(self._on_save_results)
+        toolbar.addWidget(self._btn_save_results)
+
+        self._btn_help = QPushButton("  Help")
+        self._btn_help.setFixedHeight(34)
+        self._btn_help.clicked.connect(self._on_help)
+        toolbar.addWidget(self._btn_help)
+
+        toolbar.addSeparator()
 
         self._progress_bar = QProgressBar()
-        self._progress_bar.setFixedWidth(200)
-        self._progress_bar.setFixedHeight(4)
+        self._progress_bar.setFixedWidth(150)
+        self._progress_bar.setFixedHeight(6)
         self._progress_bar.setTextVisible(False)
+        self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
-        lay.addWidget(self._progress_bar)
+        toolbar.addWidget(self._progress_bar)
 
-        self._progress_lbl = QLabel("")
-        lay.addWidget(self._progress_lbl)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
 
-        lay.addStretch()
+        self._logos_widget = self._create_logos()
+        toolbar.addWidget(self._logos_widget)
 
-        self._model_badge = Badge("idle", "Model")
-        self._ocr_badge = Badge("idle", "OCR")
-        lay.addWidget(self._model_badge)
-        lay.addSpacing(8)
-        lay.addWidget(self._ocr_badge)
+        return toolbar
 
-        lay.addSpacing(12)
+    def _create_logos(self):
+        logos = QWidget()
+        logos.setFixedWidth(140)
+        lay = QHBoxLayout(logos)
+        lay.setContentsMargins(0, 5, 10, 5)
+        lay.setSpacing(8)
 
-        # ── Theme toggle button ──────────────────────────────────────
-        self._theme_btn = QPushButton("☀" if self._theme_mgr.is_dark else "🌙")
-        self._theme_btn.setObjectName("themeToggle")
-        self._theme_btn.setToolTip("Toggle light / dark theme")
-        self._theme_btn.setFixedSize(32, 32)
-        self._theme_btn.clicked.connect(self._toggle_theme)
-        lay.addWidget(self._theme_btn)
-
-        self._apply_topbar_style()
-        return self._topbar
-
-    def _build_body(self) -> QSplitter:
-        self.left = LeftPanel()
-        self.center = CenterPanel()
-        self.right = RightPanel()
-
-        body = QSplitter(Qt.Orientation.Horizontal)
-        body.setHandleWidth(1)
-        body.addWidget(self.left)
-        body.addWidget(self.center)
-        body.addWidget(self.right)
-        body.setSizes([280, 580, 380])
-        body.setCollapsible(0, False)
-        body.setCollapsible(1, False)
-        body.setCollapsible(2, False)
-
-        return body
-
-    def _build_log_wrap(self) -> QWidget:
-        self._log_wrap = QWidget()
-        lay = QVBoxLayout(self._log_wrap)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-
-        self.log_panel = LogPanel()
-        lay.addWidget(self.log_panel)
-
-        self._apply_log_wrap_style()
-        return self._log_wrap
-
-    # ── inline theme styles ──────────────────────────────────────────────
-
-    def _apply_topbar_style(self) -> None:
-        self._topbar.setStyleSheet(
-            f"background:{COLORS['surface']};"
-            f"border-bottom:1px solid {COLORS['border']};"
+        logo1 = QLabel()
+        logo1.setFixedSize(60, 36)
+        logo1.setStyleSheet(
+            f"background: {COLORS['accent']}30; border: 1px solid {COLORS['accent']}60; border-radius: 4px; color: {COLORS['accent']}; font-size: 9px;"
         )
-        self._title_lbl.setStyleSheet(
-            f"color:{COLORS['text_primary']};"
-            f"font-size:13px;font-weight:700;"
-            f"letter-spacing:1px;font-family:'Consolas',monospace;"
+        logo1.setText("LOGO 1")
+        logo1.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        logo2 = QLabel()
+        logo2.setFixedSize(60, 36)
+        logo2.setStyleSheet(
+            f"background: {COLORS['success']}30; border: 1px solid {COLORS['success']}60; border-radius: 4px; color: {COLORS['success']}; font-size: 9px;"
         )
-        self._progress_lbl.setStyleSheet(
-            f"color:{COLORS['text_muted']};"
-            f"font-size:11px;font-family:'Consolas',monospace;"
-            f"min-width:260px;"
+        logo2.setText("LOGO 2")
+        logo2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        lay.addWidget(logo1)
+        lay.addWidget(logo2)
+        return logos
+
+    def _create_content_area(self):
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        self._left_panel = LeftPanel()
+        self._center_panel = CenterPanel()
+        self._right_panel = RightPanel()
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(2)
+        splitter.addWidget(self._left_panel)
+        splitter.addWidget(self._center_panel)
+        splitter.addWidget(self._right_panel)
+        splitter.setSizes([260, 700, 260])
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        splitter.setCollapsible(2, False)
+
+        layout.addWidget(splitter)
+        return container
+
+    def _apply_styles(self):
+        self.setStyleSheet(f"""
+            QMainWindow {{ background: {COLORS["bg"]}; }}
+            QToolBar {{ background: {COLORS["surface"]}; border-bottom: 1px solid {COLORS["border"]}; padding: 4px 8px; }}
+            QPushButton {{ background: {COLORS["surface2"]}; color: {COLORS["text_primary"]}; border: 1px solid {COLORS["border"]}; border-radius: 6px; padding: 6px 16px; font-size: 12px; }}
+            QPushButton:hover {{ background: {COLORS["surface3"]}; }}
+            QPushButton#primary {{ background: {COLORS["accent"]}; color: white; border: none; font-weight: 600; }}
+            QPushButton#primary:hover {{ background: {COLORS["accent_hover"]}; }}
+            QPushButton:disabled {{ background: {COLORS["surface2"]}; color: {COLORS["text_muted"]}; }}
+            QProgressBar {{ background: {COLORS["surface2"]}; border: none; border-radius: 3px; }}
+            QProgressBar::chunk {{ background: {COLORS["accent"]}; border-radius: 3px; }}
+            QSplitter::handle {{ background: {COLORS["border"]}; }}
+        """)
+
+    def _connect_signals(self):
+        self._left_panel.calculateDose.connect(self._on_calculate_dose)
+        self._center_panel.zoom_changed.connect(self._on_zoom_changed)
+        self._bottom_panel.save_clicked.connect(self._on_save_results)
+        self._bottom_panel.clear_clicked.connect(self._on_clear_results)
+
+    def _auto_load_models(self):
+        model_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "models",
+            "best.pt",
         )
+        if os.path.exists(model_path):
+            self._load_yolo_model(model_path)
 
-    def _apply_log_wrap_style(self) -> None:
-        self._log_wrap.setStyleSheet(
-            f"background:{COLORS['surface']};border-top:1px solid {COLORS['border']};"
+    def _load_yolo_model(self, model_path):
+        self._status_bar.showMessage("Loading YOLO model...")
+        self._right_panel.info("Loading YOLO model...")
+
+        self._yolo_loader = ModelLoaderThread("yolo", model_path)
+        self._yolo_loader.progress.connect(
+            lambda msg, val: self._status_bar.showMessage(msg)
         )
+        self._yolo_loader.loaded.connect(self._on_yolo_loaded)
+        self._yolo_loader.error.connect(self._on_model_error)
+        self._yolo_loader.start()
 
-    # ═════════════════════════════════════════════════════════════════════
-    #  SIGNALS
-    # ═════════════════════════════════════════════════════════════════════
+    def _load_ocr_engine(self):
+        self._status_bar.showMessage("Loading OCR engine...")
+        self._right_panel.info("Loading OCR engine...")
 
-    def _connect_signals(self) -> None:
-        L = self.left
-        L.loadModelClicked.connect(self._load_model)
-        L.loadOCRClicked.connect(self._load_ocr)
-        L.addFilesClicked.connect(self._add_files)
-        L.addFolderClicked.connect(self._add_folder)
-        L.clearFilesClicked.connect(self._clear_files)
-        L.runClicked.connect(self._run)
-        L.exportClicked.connect(self._export)
+        self._ocr_loader = ModelLoaderThread("ocr")
+        self._ocr_loader.progress.connect(
+            lambda msg, val: self._status_bar.showMessage(msg)
+        )
+        self._ocr_loader.loaded.connect(self._on_ocr_loaded)
+        self._ocr_loader.error.connect(self._on_model_error)
+        self._ocr_loader.start()
 
-        self.center.fileSelected.connect(self._on_file_selected)
+    @Slot(object, str)
+    def _on_yolo_loaded(self, model, model_type):
+        self._yolo_model = model
+        self._right_panel.success("YOLO model loaded")
+        self._status_bar.showMessage("YOLO model ready")
+        self._load_ocr_engine()
 
-    # ═════════════════════════════════════════════════════════════════════
-    #  LOADING STATE MANAGEMENT
-    # ═════════════════════════════════════════════════════════════════════
+    @Slot(object, str)
+    def _on_ocr_loaded(self, reader, model_type):
+        self._ocr_reader = reader
+        self._right_panel.success("OCR engine loaded")
+        self._status_bar.showMessage("Ready to use")
+        if self._current_image_path:
+            self._btn_scan_text.setEnabled(True)
 
-    def _set_loading_state(self, loading: bool) -> None:
-        """Toggle the global loading-state UI (cursor, progress, buttons)."""
-        if loading and not self._is_loading:
-            self._is_loading = True
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            self._progress_bar.setRange(0, 0)  # indeterminate pulse
-            self.left.setInteractable(False)
-        elif not loading and self._is_loading:
-            self._is_loading = False
-            QApplication.restoreOverrideCursor()
-            self._progress_bar.setRange(0, 100)
-            self._progress_bar.setValue(0)
-            self._progress_lbl.setText("")
-            self.left.setInteractable(True)
+    @Slot(str)
+    def _on_model_error(self, error_msg):
+        self._right_panel.error(f"Model error: {error_msg}")
+        self._status_bar.showMessage(f"Error: {error_msg}")
+        QMessageBox.critical(self, "Model Loading Error", error_msg)
 
-    # ═════════════════════════════════════════════════════════════════════
-    #  THEME TOGGLE
-    # ═════════════════════════════════════════════════════════════════════
+    @Slot()
+    def _on_open_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Image",
+            "",
+            "All Files (*.*);;DICOM Files (*.dcm *.dicom);;Images (*.jpg *.jpeg *.png *.bmp *.tiff *.tif)",
+        )
+        if path:
+            self._load_image(path)
 
-    def _toggle_theme(self) -> None:
-        """Swap dark ↔ light and refresh every themed surface."""
-        self._theme_mgr.toggle()
-        app = QApplication.instance()
-        self._theme_mgr.apply(app)
+    def _load_image(self, path):
+        self._current_image_path = path
+        self._right_panel.info(f"Loading image: {os.path.basename(path)}")
+        if self._center_panel.set_image(path):
+            self._right_panel.success(f"Image loaded: {os.path.basename(path)}")
+            self._status_bar.showMessage(f"Image loaded: {os.path.basename(path)}")
+            patient_info = DicomHandler.get_patient_info(path)
+            if patient_info.get("patient_id") or patient_info.get("name"):
+                self._left_panel.set_from_image_data(patient_info)
+                self._right_panel.info("Patient metadata extracted from DICOM")
+            if self._patient_csv_data:
+                self._try_match_patient(patient_info)
+            if self._yolo_model and self._ocr_reader:
+                self._btn_scan_text.setEnabled(True)
+        else:
+            self._right_panel.error(f"Failed to load: {path}")
+            QMessageBox.warning(self, "Load Error", f"Could not load image:\n{path}")
 
-        # Update toggle icon
-        self._theme_btn.setText("☀" if self._theme_mgr.is_dark else "🌙")
+    @Slot()
+    def _on_open_patient_data(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Patient Data CSV", "", "CSV Files (*.csv);;All Files (*)"
+        )
+        if path:
+            self._load_patient_data(path)
 
-        # Cascade refresh to all inline-styled widgets
-        self._apply_topbar_style()
-        self._apply_log_wrap_style()
-        self._model_badge.refresh_theme()
-        self._ocr_badge.refresh_theme()
+    def _load_patient_data(self, path):
+        try:
+            import pandas as pd
 
-        self.left.refresh_theme()
-        self.center.refresh_theme()
-        self.right.refresh_theme()
-        self.log_panel.refresh_theme()
+            df = pd.read_csv(path)
+            self._patient_csv_data = df.to_dict("records")
+            self._data_matcher.load_patient_data(self._patient_csv_data)
+            self._right_panel.success(
+                f"Loaded {len(self._patient_csv_data)} patient records"
+            )
+            self._status_bar.showMessage("Patient data loaded")
+            if self._current_image_path:
+                patient_info = DicomHandler.get_patient_info(self._current_image_path)
+                self._try_match_patient(patient_info)
+        except Exception as e:
+            self._right_panel.error(f"Failed to load CSV: {str(e)}")
+            QMessageBox.critical(self, "Load Error", f"Could not load CSV:\n{str(e)}")
 
-    # ═════════════════════════════════════════════════════════════════════
-    #  STATE HELPERS
-    # ═════════════════════════════════════════════════════════════════════
-
-    def _update_run_state(self) -> None:
-        ready = bool(self._model and self._reader and self._files)
-        self.left.setRunnable(ready)
-
-        if ready:
-            self.left.setRunHint("")
+    def _try_match_patient(self, patient_info):
+        if not self._patient_csv_data:
             return
+        extracted = {
+            "patient_id": patient_info.get("patient_id", ""),
+            "name": patient_info.get("name", ""),
+            "age": patient_info.get("age", ""),
+            "gender": patient_info.get("gender", ""),
+        }
+        matched = self._data_matcher.match_patient(extracted)
+        if matched:
+            self._left_panel.set_matched_data(matched)
+            self._right_panel.success("Patient data matched!")
+        else:
+            self._left_panel.set_matched_data(None)
+            self._right_panel.info("No matching patient data found")
 
-        missing = []
-        if not self._model:
-            missing.append("① Load Model")
-        if not self._reader:
-            missing.append("② Load OCR")
-        if not self._files:
-            missing.append("③ Add files")
-        self.left.setRunHint("  ·  ".join(missing))
-
-    def _post_status(self, msg: str) -> None:
-        self._status_bar.showMessage(msg)
-        self.log_panel.append(msg)
-
-    def _refresh_file_list(self) -> None:
-        self.left.setFileCount(len(self._files))
-        self.center.setFiles(self._files)
-        self._update_run_state()
-
-    # ═════════════════════════════════════════════════════════════════════
-    #  MODEL / OCR LOADING
-    # ═════════════════════════════════════════════════════════════════════
-
-    def _load_model(self) -> None:
-        path = self.left.model_path
-        if not path or not os.path.isfile(path):
+    @Slot()
+    def _on_scan_text(self):
+        if not self._current_image_path:
+            QMessageBox.warning(self, "No Image", "Please open an image first.")
+            return
+        if not self._yolo_model or not self._ocr_reader:
             QMessageBox.warning(
-                self,
-                "Model not found",
-                f"File not found:\n{path or '(empty)'}",
+                self, "Models Not Ready", "Please wait for models to load."
             )
             return
 
-        self._set_loading_state(True)
-        self.left.model_badge.setState("busy", "Loading…")
-        self._model_badge.setState("busy", "Model")
-        self._progress_lbl.setText("⏳ Loading YOLO model…")
-        self._post_status(f"Loading YOLO model — {os.path.basename(path)} …")
-
-        self._model_loader = ModelLoader("yolo", model_path=path)
-        self._model_loader.done.connect(self._on_loader_done)
-        self._model_loader.error.connect(self._on_load_error)
-        self._model_loader.start()
-
-    def _load_ocr(self) -> None:
-        self._set_loading_state(True)
-        self.left.ocr_badge.setState("busy", "Loading…")
-        self._ocr_badge.setState("busy", "OCR")
-        self._progress_lbl.setText("⏳ Loading EasyOCR engine…")
-        self._post_status("Loading EasyOCR reader …")
-
-        self._ocr_loader = ModelLoader(
-            "ocr",
-            languages=self.left.languages,
-            use_gpu=self.left.use_gpu,
-        )
-        self._ocr_loader.done.connect(self._on_loader_done)
-        self._ocr_loader.error.connect(self._on_load_error)
-        self._ocr_loader.start()
-
-    def _on_loader_done(self, obj: object, kind: str) -> None:
-        if kind == "yolo":
-            self._model = obj
-            self.left.model_badge.setState("ok", "Ready")
-            self._model_badge.setState("ok", "Model")
-            self._post_status("YOLO model loaded successfully.")
-
-            # ── Auto-load OCR after model (requirement #4) ────────────
-            if self._reader is None:
-                self._load_ocr()  # stays in loading state
-            else:
-                self._set_loading_state(False)
-
-        elif kind == "ocr":
-            self._reader = obj
-            self.left.ocr_badge.setState("ok", "Ready")
-            self._ocr_badge.setState("ok", "OCR")
-            self._post_status("EasyOCR reader loaded successfully.")
-            self._set_loading_state(False)
-
-        self._update_run_state()
-
-    def _on_load_error(self, msg: str) -> None:
-        self.left.model_badge.setState("error", "Error")
-        self.left.ocr_badge.setState("error", "Error")
-        self._model_badge.setState("error", "Model")
-        self._ocr_badge.setState("error", "OCR")
-        self._set_loading_state(False)
-        self._post_status(f"Error: {msg}")
-        QMessageBox.critical(self, "Load Error", msg)
-
-    # ═════════════════════════════════════════════════════════════════════
-    #  FILE MANAGEMENT
-    # ═════════════════════════════════════════════════════════════════════
-
-    def _add_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select images",
-            "",
-            "Images (*.jpg *.jpeg *.png *.bmp *.tiff *.tif *.dcm)",
-        )
-        if not paths:
-            return
-
-        new_entries = collect_files_from_paths(paths)
-        existing = {f["path"] for f in self._files if f.get("type") == "path"}
-        added = [e for e in new_entries if e["path"] not in existing]
-
-        self._files.extend(added)
-        self._refresh_file_list()
-        if added:
-            self._post_status(f"Added {len(added)} file(s) to queue.")
-
-    def _add_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Select folder")
-        if not folder:
-            return
-
-        new_entries = collect_files_from_folder(folder)
-        existing = {f["path"] for f in self._files if f.get("type") == "path"}
-        added = [e for e in new_entries if e["path"] not in existing]
-
-        self._files.extend(added)
-        self._refresh_file_list()
-        self._post_status(
-            f"Added {len(added)} file(s) from {os.path.basename(folder)}/"
-        )
-
-    def _clear_files(self) -> None:
-        self._files.clear()
-        self._results.clear()
-        self.center.clearResults()
-        self._refresh_file_list()
-        self.right.clear()
-        self.left.setExportable(False)
-        self._post_status("File queue cleared.")
-
-    def _on_file_selected(self, file_dict: dict) -> None:
-        name = file_dict.get("name", "")
-        for r in self._results:
-            if r.get("filename") == name:
-                self.right.showResult(r)
-                return
-        self.right.clear()
-
-    # ═════════════════════════════════════════════════════════════════════
-    #  INFERENCE
-    # ═════════════════════════════════════════════════════════════════════
-
-    def _run(self) -> None:
-        if self._worker and self._worker.isRunning():
-            return
-
-        self.left.btn_run.setEnabled(False)
-        self.left.setExportable(False)
-        self._progress_bar.setRange(0, 100)
+        self._btn_scan_text.setEnabled(False)
+        self._btn_save_results.setEnabled(False)
         self._progress_bar.setValue(0)
-        self._progress_lbl.setText("")
-        self._results = []
-        self.right.clear()
-        self._post_status("Starting detection …")
+        self._right_panel.info("Starting text scan...")
 
-        self._worker = InferenceWorker(
-            model=self._model,
-            reader=self._reader,
-            files=self._files,
-            conf=self.left.conf,
-            save_crops=self.left.save_crops,
+        self._inference_thread = InferenceThread(
+            self._yolo_model, self._ocr_reader, self._current_image_path, conf=0.25
         )
-        self._worker.progress.connect(self._on_progress)
-        self._worker.result.connect(self._on_result)
-        self._worker.error.connect(self._on_inference_error)
-        self._worker.log.connect(self.log_panel.append)
-        self._worker.start()
+        self._inference_thread.progress.connect(self._on_inference_progress)
+        self._inference_thread.result.connect(self._on_inference_complete)
+        self._inference_thread.error.connect(self._on_inference_error)
+        self._inference_thread.start()
 
-    def _on_progress(self, pct: int, label: str) -> None:
-        self._progress_bar.setValue(pct)
-        self._progress_lbl.setText(label)
+    @Slot(int, str)
+    def _on_inference_progress(self, value, message):
+        self._progress_bar.setValue(value)
+        self._status_bar.showMessage(message)
 
-    def _on_result(self, results: list, output_dir: str) -> None:
-        self._results = results
-        self._output_dir = output_dir
-
+    @Slot(object)
+    def _on_inference_complete(self, result):
+        self._current_result = result
         self._progress_bar.setValue(100)
-        self._progress_lbl.setText("Done")
+        self._center_panel.set_detections(result.detections)
 
-        self.left.btn_run.setEnabled(True)
-        self.left.setExportable(True)
+        extracted_data = {
+            "patient_name": result.patient_info.get("name", ""),
+            "exam_type": result.patient_info.get("study_description", ""),
+            "notes": result.combined_text[:500]
+            if len(result.combined_text) > 500
+            else result.combined_text,
+            "full_text": result.combined_text,
+        }
+        self._bottom_panel.set_extracted_data(extracted_data)
 
-        for r in results:
-            self.center.markProcessed(r["filename"], r)
+        detection_count = len(result.detections)
+        if detection_count > 0:
+            self._right_panel.success(
+                f"Text scan complete! Found {detection_count} text regions"
+            )
+            self._status_bar.showMessage(
+                f"Text found! {detection_count} regions detected"
+            )
+        else:
+            self._right_panel.warning("No text detected in image")
+            self._status_bar.showMessage("No text found")
 
-        if results:
-            self.right.showResult(results[0])
+        self._btn_scan_text.setEnabled(True)
+        self._btn_save_results.setEnabled(True)
 
-        self._post_status(f"Detection complete — {len(results)} image(s) processed.")
-        self._update_run_state()
+    @Slot(str)
+    def _on_inference_error(self, error_msg):
+        self._right_panel.error(f"Scan error: {error_msg}")
+        self._status_bar.showMessage(f"Error: {error_msg}")
+        QMessageBox.critical(self, "Scan Error", error_msg)
+        self._btn_scan_text.setEnabled(True)
+        self._progress_bar.setValue(0)
 
-    def _on_inference_error(self, msg: str) -> None:
-        self.left.btn_run.setEnabled(True)
-        self._post_status(f"Error: {msg}")
-        QMessageBox.critical(self, "Inference Error", msg)
-        self._update_run_state()
-
-    # ═════════════════════════════════════════════════════════════════════
-    #  EXPORT
-    # ═════════════════════════════════════════════════════════════════════
-
-    def _export(self) -> None:
-        if not self._output_dir or not os.path.isdir(self._output_dir):
-            QMessageBox.warning(self, "Nothing to export", "No output directory found.")
-            return
-
-        default_name = f"detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-        save_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export results",
-            default_name,
-            "ZIP archive (*.zip)",
-        )
-        if not save_path:
-            return
-
+    @Slot(float)
+    def _on_calculate_dose(self, weight):
+        data = self._left_panel._patient_id_label.text()
+        age_str = self._left_panel._age_label.text()
+        gender = self._left_panel._gender_label.text()
         try:
-            with zipfile.ZipFile(save_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for dirpath, _dirs, filenames in os.walk(self._output_dir):
-                    for fname in filenames:
-                        abs_path = os.path.join(dirpath, fname)
-                        arc_name = os.path.relpath(abs_path, self._output_dir)
-                        zf.write(abs_path, arc_name)
-            self._post_status(f"Exported → {save_path}")
-        except Exception as exc:
-            QMessageBox.critical(self, "Export Error", str(exc))
+            age = int(age_str) if age_str and age_str != "-" else 30
+        except ValueError:
+            age = 30
 
+        exam_type = self._bottom_panel.get_exam_type()
+        if not exam_type:
+            exam_type = "DEFAULT"
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  DPI SETUP
-# ═════════════════════════════════════════════════════════════════════════════
+        result = DoseCalculator.estimate_dose(age, gender, weight, exam_type)
+        dose = result["estimated_dose_msv"]
+        comparison = DoseCalculator.get_dose_comparison(dose)
+        comp_text = f"~ {comparison['equivalent_chest_xrays']} chest X-rays"
+        self._left_panel.set_dose_result(dose, comp_text)
+        self._right_panel.info(f"Estimated dose: {dose:.2f} mSv")
 
+    @Slot()
+    def _on_save_results(self):
+        if not self._current_result:
+            QMessageBox.warning(
+                self, "No Results", "No results to save. Run text scan first."
+            )
+            return
 
-def _setup_dpi() -> None:
-    """Configure High-DPI scaling before QApplication is created."""
-    os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
-    os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Results",
+            f"results_{os.path.basename(self._current_image_path)}.csv",
+            "CSV Files (*.csv);;All Files (*)",
+        )
+        if path:
+            try:
+                import csv
 
+                with open(path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(
+                        ["Detection ID", "Text", "Confidence", "X1", "Y1", "X2", "Y2"]
+                    )
+                    for det in self._current_result.detections:
+                        writer.writerow(
+                            [det.get("id", 0), det.get("text", ""), det.get("conf", 0)]
+                            + det.get("xyxy", [0, 0, 0, 0])
+                        )
+                self._right_panel.success(f"Results saved to {os.path.basename(path)}")
+                self._status_bar.showMessage("Results saved")
+            except Exception as e:
+                self._right_panel.error(f"Save error: {str(e)}")
+                QMessageBox.critical(self, "Save Error", str(e))
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  ENTRY POINT
-# ═════════════════════════════════════════════════════════════════════════════
+    @Slot()
+    def _on_clear_results(self):
+        self._current_result = None
+        self._center_panel.clear()
+        self._bottom_panel.clear()
+        self._left_panel.clear_all()
+        self._right_panel.info("Results cleared")
 
+    @Slot(float)
+    def _on_zoom_changed(self, zoom):
+        percent = int(zoom * 100)
+        self._footer_label.setText(f"Size: -  |  Zoom: {percent}%")
 
-def launch() -> None:
-    """Create the QApplication, apply theme, show the window, and run."""
-    _setup_dpi()
+    @Slot()
+    def _on_help(self):
+        help_text = "<h2>Radiology Reader Help</h2><p><b>1. Open Image:</b> Load a DICOM or standard image file.</p><p><b>2. Open Patient Data:</b> Load a CSV file with patient records.</p><p><b>3. Scan Text:</b> Run text detection and OCR on the loaded image.</p><p><b>4. Save Results:</b> Export detected text to CSV format.</p><p><b>5. Dose Estimation:</b> Enter patient weight and calculate estimated radiation dose.</p>"
+        QMessageBox.information(self, "Help", help_text)
 
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-
-    # Set org/app name for QSettings persistence
-    QCoreApplication.setOrganizationName("YOLOxOCR")
-    QCoreApplication.setApplicationName("DetectionSuite")
-
-    # ThemeManager reads QSettings and swaps COLORS in-place
-    theme_mgr = ThemeManager()
-    theme_mgr.apply(app)
-
-    win = MainWindow(theme_mgr)
-    win.show()
-    sys.exit(app.exec())
+    def closeEvent(self, event):
+        self._database_service.close()
+        event.accept()

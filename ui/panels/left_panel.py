@@ -1,14 +1,14 @@
 """
-Left Panel Module - Patient Information
-Displays patient information extracted from images and matched data.
+Left Panel Module - Patient Information Display
+
+Clinical-grade patient information panel displaying DICOM metadata
+and matched database records. Designed for clarity and readability.
 """
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
-    QFormLayout,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -21,236 +21,315 @@ from ui.theme import COLORS
 
 
 class LeftPanel(QWidget):
-    """Left panel containing patient information and dose estimation."""
+    """Left panel - Patient information and dose estimation."""
 
     calculateDose = Signal(float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumWidth(260)
-        self.setMaximumWidth(340)
+        self.setMaximumWidth(320)
         self._build_ui()
-        self._apply_styles()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        scroll = QScrollArea(self)
+        # Scrollable content
+        scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
 
-        scroll_widget = QWidget()
-        inner_layout = QVBoxLayout(scroll_widget)
-        inner_layout.setContentsMargins(12, 12, 12, 12)
-        inner_layout.setSpacing(12)
+        content = QWidget()
+        content.setStyleSheet(f"background: {COLORS['bg']};")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
 
-        self._build_from_image_section(inner_layout)
-        self._build_patient_found_section(inner_layout)
-        self._build_dose_estimation_section(inner_layout)
+        # DICOM Metadata Section
+        layout.addWidget(self._create_dicom_section())
 
-        inner_layout.addStretch()
+        # Matched Data Section
+        layout.addWidget(self._create_matched_section())
 
-        scroll.setWidget(scroll_widget)
+        # Dose Estimation Section
+        layout.addWidget(self._create_dose_section())
+
+        layout.addStretch()
+        scroll.setWidget(content)
         root.addWidget(scroll)
 
-    def _build_from_image_section(self, parent_layout) -> None:
-        group = QGroupBox("From Image")
-        layout = QFormLayout(group)
-        layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+    def _create_section_card(self, title: str) -> tuple:
+        """Create a clean card container with header."""
+        card = QFrame()
+        card.setStyleSheet(f"""
+            QFrame {{
+                background: {COLORS["surface"]};
+                border: 1px solid {COLORS["border"]};
+                border-radius: 6px;
+            }}
+        """)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Header
+        header = QWidget()
+        header.setStyleSheet(f"""
+            background: {COLORS["surface2"]};
+            border-top-left-radius: 5px;
+            border-top-right-radius: 5px;
+        """)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(12, 8, 12, 8)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet(f"""
+            color: {COLORS["text_primary"]};
+            font-size: 12px;
+            font-weight: 600;
+            background: transparent;
+        """)
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+        layout.addWidget(header)
+
+        # Content area
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(12, 10, 12, 12)
+        content_layout.setSpacing(6)
+        layout.addWidget(content)
+
+        return card, content_layout
+
+    def _create_info_row(self, label: str) -> tuple:
+        """Create a label-value row and return the value label."""
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        self._patient_id_label = QLabel("—")
-        layout.addRow("Patient ID:", self._patient_id_label)
+        lbl = QLabel(label)
+        lbl.setStyleSheet(f"""
+            color: {COLORS["text_label"]};
+            font-size: 12px;
+            background: transparent;
+        """)
+        lbl.setMinimumWidth(70)
 
-        self._name_label = QLabel("—")
-        layout.addRow("Name:", self._name_label)
+        val = QLabel("—")
+        val.setStyleSheet(f"""
+            color: {COLORS["text_primary"]};
+            font-size: 12px;
+            font-family: "Consolas", "SF Mono", monospace;
+            background: transparent;
+        """)
+        val.setWordWrap(True)
 
-        self._age_label = QLabel("—")
-        layout.addRow("Age:", self._age_label)
+        layout.addWidget(lbl)
+        layout.addWidget(val, 1)
 
-        self._gender_label = QLabel("—")
-        layout.addRow("Gender:", self._gender_label)
+        return row, val
 
-        self._exam_date_label = QLabel("—")
-        layout.addRow("Exam Date:", self._exam_date_label)
+    def _create_dicom_section(self) -> QFrame:
+        """Create DICOM metadata section."""
+        card, layout = self._create_section_card("DICOM Metadata")
 
-        parent_layout.addWidget(group)
+        row, self._patient_id_label = self._create_info_row("Patient ID")
+        layout.addWidget(row)
 
-    def _build_patient_found_section(self, parent_layout) -> None:
-        group = QGroupBox("Patient Data Found")
-        layout = QFormLayout(group)
-        layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.setSpacing(8)
+        row, self._name_label = self._create_info_row("Name")
+        layout.addWidget(row)
 
-        status_row = QHBoxLayout()
+        row, self._age_label = self._create_info_row("Age")
+        layout.addWidget(row)
+
+        row, self._gender_label = self._create_info_row("Gender")
+        layout.addWidget(row)
+
+        row, self._exam_date_label = self._create_info_row("Exam Date")
+        layout.addWidget(row)
+
+        return card
+
+    def _create_matched_section(self) -> QFrame:
+        """Create matched patient data section."""
+        card, layout = self._create_section_card("Database Match")
+
+        # Status row
+        status_widget = QWidget()
+        status_widget.setStyleSheet("background: transparent;")
+        status_layout = QHBoxLayout(status_widget)
+        status_layout.setContentsMargins(0, 0, 0, 4)
+        status_layout.setSpacing(8)
+
         self._status_indicator = QLabel("○")
-        self._status_text = QLabel("No Matching Data")
-        self._status_indicator.setFixedWidth(20)
-        status_row.addWidget(self._status_indicator)
-        status_row.addWidget(self._status_text)
-        status_row.addStretch()
-        layout.addRow("Status:", status_row)
+        self._status_indicator.setFixedWidth(16)
+        self._status_indicator.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 14px; background: transparent;")
 
-        self._matched_patient_id = QLabel("—")
-        layout.addRow("Patient ID:", self._matched_patient_id)
+        self._status_text = QLabel("No match found")
+        self._status_text.setStyleSheet(f"""
+            color: {COLORS["text_muted"]};
+            font-size: 12px;
+            font-weight: 500;
+            background: transparent;
+        """)
 
-        self._matched_age = QLabel("—")
-        layout.addRow("Age:", self._matched_age)
+        status_layout.addWidget(self._status_indicator)
+        status_layout.addWidget(self._status_text)
+        status_layout.addStretch()
+        layout.addWidget(status_widget)
 
-        self._matched_gender = QLabel("—")
-        layout.addRow("Gender:", self._matched_gender)
+        # Divider
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setFixedHeight(1)
+        divider.setStyleSheet(f"background: {COLORS['border']}; border: none;")
+        layout.addWidget(divider)
 
-        parent_layout.addWidget(group)
+        row, self._matched_patient_id = self._create_info_row("Patient ID")
+        layout.addWidget(row)
 
-    def _build_dose_estimation_section(self, parent_layout) -> None:
-        group = QGroupBox("Dose Estimation")
-        layout = QVBoxLayout(group)
-        layout.setSpacing(10)
+        row, self._matched_age = self._create_info_row("Age")
+        layout.addWidget(row)
 
-        weight_row = QHBoxLayout()
-        weight_row.addWidget(QLabel("Weight (kg):"))
+        row, self._matched_gender = self._create_info_row("Gender")
+        layout.addWidget(row)
+
+        return card
+
+    def _create_dose_section(self) -> QFrame:
+        """Create dose estimation section."""
+        card, layout = self._create_section_card("Dose Estimation")
+
+        # Weight input row
+        weight_widget = QWidget()
+        weight_widget.setStyleSheet("background: transparent;")
+        weight_layout = QHBoxLayout(weight_widget)
+        weight_layout.setContentsMargins(0, 0, 0, 0)
+        weight_layout.setSpacing(8)
+
+        weight_label = QLabel("Weight")
+        weight_label.setStyleSheet(f"color: {COLORS['text_label']}; font-size: 12px; background: transparent;")
+        weight_label.setMinimumWidth(70)
 
         self._weight_input = QDoubleSpinBox()
         self._weight_input.setRange(1.0, 300.0)
         self._weight_input.setValue(70.0)
         self._weight_input.setDecimals(1)
         self._weight_input.setSuffix(" kg")
-        self._weight_input.setMinimumWidth(100)
-        weight_row.addWidget(self._weight_input)
-        weight_row.addStretch()
+        self._weight_input.setFixedWidth(100)
+        self._weight_input.setStyleSheet(f"""
+            QDoubleSpinBox {{
+                background: {COLORS["surface2"]};
+                color: {COLORS["text_primary"]};
+                border: 1px solid {COLORS["border"]};
+                border-radius: 4px;
+                padding: 4px 8px;
+            }}
+            QDoubleSpinBox:focus {{
+                border-color: {COLORS["accent"]};
+            }}
+        """)
 
-        layout.addLayout(weight_row)
+        weight_layout.addWidget(weight_label)
+        weight_layout.addWidget(self._weight_input)
+        weight_layout.addStretch()
+        layout.addWidget(weight_widget)
 
-        self._calculate_btn = QPushButton("Calculate")
+        # Calculate button
+        self._calculate_btn = QPushButton("Calculate Dose")
         self._calculate_btn.setObjectName("primary")
-        self._calculate_btn.setFixedHeight(36)
+        self._calculate_btn.setFixedHeight(32)
+        self._calculate_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._calculate_btn.clicked.connect(self._on_calculate_clicked)
         layout.addWidget(self._calculate_btn)
 
+        # Result display
         result_frame = QFrame()
-        result_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        result_frame.setStyleSheet(f"""
+            QFrame {{
+                background: {COLORS["surface2"]};
+                border: 1px solid {COLORS["border"]};
+                border-radius: 4px;
+            }}
+        """)
         result_layout = QVBoxLayout(result_frame)
-        result_layout.setContentsMargins(8, 8, 8, 8)
-        result_layout.setSpacing(4)
+        result_layout.setContentsMargins(10, 8, 10, 8)
+        result_layout.setSpacing(2)
 
-        self._dose_result_label = QLabel("Estimated Dose:")
-        self._dose_result_label.setStyleSheet("font-weight: bold; color: #3498DB;")
-        result_layout.addWidget(self._dose_result_label)
+        result_label = QLabel("Estimated Dose")
+        result_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px; font-weight: 600; letter-spacing: 0.5px; background: transparent;")
+        result_layout.addWidget(result_label)
 
         self._dose_value_label = QLabel("— mSv")
-        self._dose_value_label.setStyleSheet(
-            "font-size: 18px; font-weight: bold; color: #ECF0F1;"
-        )
+        self._dose_value_label.setStyleSheet(f"""
+            color: {COLORS["text_primary"]};
+            font-size: 20px;
+            font-weight: 600;
+            font-family: "Consolas", monospace;
+            background: transparent;
+        """)
         result_layout.addWidget(self._dose_value_label)
 
         self._dose_info_label = QLabel("")
-        self._dose_info_label.setStyleSheet("font-size: 10px; color: #7F8C8D;")
+        self._dose_info_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px; background: transparent;")
         result_layout.addWidget(self._dose_info_label)
 
         layout.addWidget(result_frame)
-        parent_layout.addWidget(group)
 
-    def _apply_styles(self) -> None:
-        self.setStyleSheet(
-            """
-            QGroupBox {
-                background: """
-            + COLORS["surface"]
-            + """;
-                border: 1px solid """
-            + COLORS["border"]
-            + """;
-                border-radius: 8px;
-                margin-top: 12px;
-                padding: 16px 12px 12px;
-                font-size: 11px;
-                font-weight: 600;
-                color: """
-            + COLORS["text_secondary"]
-            + """;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 8px;
-                left: 8px;
-                background: """
-            + COLORS["surface"]
-            + """;
-                color: """
-            + COLORS["text_muted"]
-            + """;
-            }
-            QFormLayout {
-                spacing: 8px;
-            }
-            QFormLayout label {
-                color: """
-            + COLORS["text_secondary"]
-            + """;
-                font-size: 12px;
-            }
-            QLabel {
-                background: transparent;
-                color: """
-            + COLORS["text_primary"]
-            + """;
-                font-size: 12px;
-            }
-            QFrame[frameShape="4"] {
-                background: """
-            + COLORS["surface2"]
-            + """;
-                border: 1px solid """
-            + COLORS["border"]
-            + """;
-                border-radius: 6px;
-            }
-        """
-        )
+        return card
 
     def _on_calculate_clicked(self) -> None:
         weight = self._weight_input.value()
         self.calculateDose.emit(weight)
 
     def set_from_image_data(self, data: dict) -> None:
-        self._patient_id_label.setText(data.get("patient_id", "—") or "—")
-        self._name_label.setText(data.get("name", "—") or "—")
-        self._age_label.setText(data.get("age", "—") or "—")
-        gender = data.get("gender", "—") or "—"
-        if gender and gender not in ("—", "O"):
-            gender_map = {"M": "Male", "F": "Female"}
-            gender = gender_map.get(gender.upper(), gender)
+        """Set patient data from DICOM metadata."""
+        self._patient_id_label.setText(data.get("patient_id") or "—")
+        self._name_label.setText(data.get("name") or "—")
+        
+        age = data.get("age")
+        self._age_label.setText(f"{age} years" if age else "—")
+        
+        gender = data.get("gender") or "—"
         self._gender_label.setText(gender)
-        self._exam_date_label.setText(data.get("exam_date", "—") or "—")
+        
+        self._exam_date_label.setText(data.get("exam_date") or "—")
 
     def set_matched_data(self, data, confidence: float = 0.0) -> None:
+        """Set matched patient data from database."""
         if data:
             self._status_indicator.setText("●")
-            self._status_indicator.setStyleSheet("color: " + COLORS["success"] + ";")
-            self._status_text.setText("Data Found")
-            self._status_text.setStyleSheet("color: " + COLORS["success"] + ";")
-            self._matched_patient_id.setText(data.get("patient_id", "—") or "—")
-            self._matched_age.setText(data.get("age", "—") or "—")
-            self._matched_gender.setText(data.get("gender", "—") or "—")
+            self._status_indicator.setStyleSheet(f"color: {COLORS['success']}; font-size: 14px; background: transparent;")
+            self._status_text.setText("Match found")
+            self._status_text.setStyleSheet(f"color: {COLORS['success']}; font-size: 12px; font-weight: 500; background: transparent;")
+            self._matched_patient_id.setText(data.get("patient_id") or "—")
+            self._matched_age.setText(data.get("age") or "—")
+            self._matched_gender.setText(data.get("gender") or "—")
         else:
             self._status_indicator.setText("○")
-            self._status_indicator.setStyleSheet("color: " + COLORS["text_muted"] + ";")
-            self._status_text.setText("No Matching Data")
-            self._status_text.setStyleSheet("color: " + COLORS["text_muted"] + ";")
+            self._status_indicator.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 14px; background: transparent;")
+            self._status_text.setText("No match found")
+            self._status_text.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; font-weight: 500; background: transparent;")
             self._matched_patient_id.setText("—")
             self._matched_age.setText("—")
             self._matched_gender.setText("—")
 
     def set_dose_result(self, dose_msv: float, comparison_text: str = "") -> None:
+        """Display dose calculation result."""
         self._dose_value_label.setText(f"{dose_msv:.2f} mSv")
-        if comparison_text:
-            self._dose_info_label.setText(comparison_text)
+        self._dose_info_label.setText(comparison_text)
 
     def clear_all(self) -> None:
+        """Clear all displayed data."""
         self._patient_id_label.setText("—")
         self._name_label.setText("—")
         self._age_label.setText("—")
@@ -261,5 +340,6 @@ class LeftPanel(QWidget):
         self._dose_info_label.setText("")
 
     def set_interactable(self, enabled: bool) -> None:
+        """Enable/disable interactive elements."""
         self._calculate_btn.setEnabled(enabled)
         self._weight_input.setEnabled(enabled)

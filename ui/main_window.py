@@ -1,10 +1,8 @@
 import os
-import sys
-from pathlib import Path
+import re
 
-from PySide6.QtCore import QSize, Qt, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QThread, Signal, Slot
 from PySide6.QtWidgets import (
-    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -64,7 +62,7 @@ class ModelLoaderThread(QThread):
 
 
 class InferenceThread(QThread):
-    """Background thread for running inference."""
+    """Background thread for YOLO + OCR inference."""
 
     progress = Signal(int, str)
     result = Signal(object)
@@ -82,25 +80,18 @@ class InferenceThread(QThread):
             import cv2
 
             self.progress.emit(10, "Loading image...")
-
-            image = DicomHandler.load_image(self.image_path)
+            image = DicomHandler.load_image(self.image_path, include_overlay=True)
             if image is None:
                 raise ValueError(f"Failed to load image: {self.image_path}")
 
+            # Patient identity comes from DICOM metadata, not OCR.
             patient_info = DicomHandler.get_patient_info(self.image_path)
-            self.progress.emit(20, "Extracting metadata...")
+            self.progress.emit(20, "Reading DICOM metadata...")
 
-            temp_png = None
-            if self.image_path.lower().endswith((".dcm", ".dicom")):
-                temp_png = DicomHandler.dicom_to_temp_png(self.image_path)
-                source = temp_png
-            else:
-                source = self.image_path
-
-            self.progress.emit(30, "Running text detection...")
-            results = self.yolo_model.predict(
-                source=source, conf=self.conf, verbose=False
-            )
+            # Use the rendered image directly so overlay text is visible to YOLO/OCR.
+            source = image
+            self.progress.emit(30, "Running text detection on rendered image...")
+            results = self.yolo_model.predict(source=source, conf=self.conf, verbose=False)
 
             detections = []
             orig_img = None
@@ -137,18 +128,14 @@ class InferenceThread(QThread):
                     if orig_img is not None
                     else image[y1:y2, x1:x2]
                 )
+
                 if crop.size > 0:
                     crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                     ocr_texts = self.ocr_reader.readtext(crop_rgb, detail=0)
                     det["text"] = " ".join(ocr_texts)
+
                 pct = 50 + int((i + 1) / len(detections) * 40) if detections else 70
                 self.progress.emit(pct, f"Processing region {i + 1}/{len(detections)}")
-
-            if temp_png:
-                try:
-                    os.unlink(temp_png)
-                except OSError:
-                    pass
 
             combined_text = " ".join(d["text"] for d in detections if d.get("text"))
             self.progress.emit(100, "Complete")
@@ -174,8 +161,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Radiology Reader")
-        self.resize(1400, 900)
-        self.setMinimumSize(1100, 700)
+        self.resize(1500, 940)
+        self.setMinimumSize(1180, 760)
 
         self._yolo_model = None
         self._ocr_reader = None
@@ -189,7 +176,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._connect_signals()
         self._apply_styles()
-        self.statusBar().showMessage("Ready to use")
+        self.statusBar().showMessage("Ready")
         self._auto_load_models()
 
     def _build_ui(self):
@@ -199,129 +186,125 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self._topbar = self._create_topbar()
-        root.addWidget(self._topbar)
-
-        content = self._create_content_area()
-        root.addWidget(content, 1)
+        root.addWidget(self._create_topbar())
+        root.addWidget(self._create_content_area(), 1)
 
         self._bottom_panel = BottomPanel()
-        self._bottom_panel.setFixedHeight(180)
+        self._bottom_panel.setFixedHeight(220)
         root.addWidget(self._bottom_panel)
 
         self._status_bar = QStatusBar()
         self._status_bar.setFixedHeight(28)
         self.setStatusBar(self._status_bar)
-        self._footer_label = QLabel("Size: -  |  Zoom: 100%")
+        self._footer_label = QLabel("Size: — | Zoom: 100%")
         self._footer_label.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 11px;"
+            f"color: {COLORS['text_muted']}; font-size: 11px; padding-right: 6px;"
         )
         self._status_bar.addPermanentWidget(self._footer_label)
 
-    def _create_topbar(self):
-        from PySide6.QtWidgets import QToolBar
+    def _create_topbar(self) -> QWidget:
+        topbar = QWidget()
+        topbar.setObjectName("topbar")
+        layout = QHBoxLayout(topbar)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
 
-        toolbar = QToolBar()
-        toolbar.setFixedHeight(50)
-        toolbar.setMovable(False)
+        brand = QLabel("Radiology Reader")
+        brand.setObjectName("topbarTitle")
+        layout.addWidget(brand)
 
-        title = QLabel("  Radiology Reader  ")
-        title.setStyleSheet(
-            f"color: {COLORS['accent']}; font-size: 16px; font-weight: bold;"
-        )
-        toolbar.addWidget(title)
-        toolbar.addSeparator()
+        subtitle = QLabel("Clinical Imaging Workflow")
+        subtitle.setObjectName("topbarSubtitle")
+        layout.addWidget(subtitle)
+        layout.addSpacing(16)
 
-        self._btn_open_image = QPushButton("  Open Image")
-        self._btn_open_image.setFixedHeight(34)
+        self._btn_open_image = QPushButton("Open Image")
+        self._btn_open_image.setFixedHeight(30)
         self._btn_open_image.clicked.connect(self._on_open_image)
-        toolbar.addWidget(self._btn_open_image)
+        layout.addWidget(self._btn_open_image)
 
-        self._btn_patient_data = QPushButton("  Open Patient Data")
-        self._btn_patient_data.setFixedHeight(34)
+        self._btn_patient_data = QPushButton("Open Patient Data")
+        self._btn_patient_data.setFixedHeight(30)
         self._btn_patient_data.clicked.connect(self._on_open_patient_data)
-        toolbar.addWidget(self._btn_patient_data)
+        layout.addWidget(self._btn_patient_data)
 
-        self._btn_scan_text = QPushButton("  Scan Text")
-        self._btn_scan_text.setFixedHeight(34)
+        self._btn_scan_text = QPushButton("Scan Embedded Text")
         self._btn_scan_text.setObjectName("primary")
+        self._btn_scan_text.setFixedHeight(30)
         self._btn_scan_text.setEnabled(False)
         self._btn_scan_text.clicked.connect(self._on_scan_text)
-        toolbar.addWidget(self._btn_scan_text)
+        layout.addWidget(self._btn_scan_text)
 
-        self._btn_save_results = QPushButton("  Save Results")
-        self._btn_save_results.setFixedHeight(34)
+        self._btn_save_results = QPushButton("Save Results")
+        self._btn_save_results.setFixedHeight(30)
         self._btn_save_results.setEnabled(False)
         self._btn_save_results.clicked.connect(self._on_save_results)
-        toolbar.addWidget(self._btn_save_results)
+        layout.addWidget(self._btn_save_results)
 
-        self._btn_help = QPushButton("  Help")
-        self._btn_help.setFixedHeight(34)
+        self._btn_help = QPushButton("Help")
+        self._btn_help.setObjectName("secondary")
+        self._btn_help.setFixedHeight(30)
         self._btn_help.clicked.connect(self._on_help)
-        toolbar.addWidget(self._btn_help)
+        layout.addWidget(self._btn_help)
 
-        toolbar.addSeparator()
+        layout.addSpacing(12)
 
         self._progress_bar = QProgressBar()
-        self._progress_bar.setFixedWidth(150)
+        self._progress_bar.setFixedWidth(140)
         self._progress_bar.setFixedHeight(6)
         self._progress_bar.setTextVisible(False)
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
-        toolbar.addWidget(self._progress_bar)
+        layout.addWidget(self._progress_bar)
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        toolbar.addWidget(spacer)
+        layout.addWidget(spacer)
 
-        self._logos_widget = self._create_logos()
-        toolbar.addWidget(self._logos_widget)
+        layout.addWidget(self._create_logos())
+        return topbar
 
-        return toolbar
+    def _create_logo_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setFixedSize(56, 28)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet(
+            f"""
+            background: {COLORS['surface2']};
+            color: {COLORS['text_secondary']};
+            border: 1px solid {COLORS['border']};
+            border-radius: 4px;
+            font-size: 9px;
+            font-weight: 600;
+            """
+        )
+        return label
 
-    def _create_logos(self):
+    def _create_logos(self) -> QWidget:
         logos = QWidget()
-        logos.setFixedWidth(140)
-        lay = QHBoxLayout(logos)
-        lay.setContentsMargins(0, 5, 10, 5)
-        lay.setSpacing(8)
-
-        logo1 = QLabel()
-        logo1.setFixedSize(60, 36)
-        logo1.setStyleSheet(
-            f"background: {COLORS['accent']}30; border: 1px solid {COLORS['accent']}60; border-radius: 4px; color: {COLORS['accent']}; font-size: 9px;"
-        )
-        logo1.setText("LOGO 1")
-        logo1.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        logo2 = QLabel()
-        logo2.setFixedSize(60, 36)
-        logo2.setStyleSheet(
-            f"background: {COLORS['success']}30; border: 1px solid {COLORS['success']}60; border-radius: 4px; color: {COLORS['success']}; font-size: 9px;"
-        )
-        logo2.setText("LOGO 2")
-        logo2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        lay.addWidget(logo1)
-        lay.addWidget(logo2)
+        logos_layout = QHBoxLayout(logos)
+        logos_layout.setContentsMargins(0, 0, 0, 0)
+        logos_layout.setSpacing(6)
+        logos_layout.addWidget(self._create_logo_label("LOGO 1"))
+        logos_layout.addWidget(self._create_logo_label("LOGO 2"))
         return logos
 
-    def _create_content_area(self):
+    def _create_content_area(self) -> QWidget:
         container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(0)
 
         self._left_panel = LeftPanel()
         self._center_panel = CenterPanel()
         self._right_panel = RightPanel()
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(2)
+        splitter.setHandleWidth(1)
         splitter.addWidget(self._left_panel)
         splitter.addWidget(self._center_panel)
         splitter.addWidget(self._right_panel)
-        splitter.setSizes([260, 700, 260])
+        splitter.setSizes([300, 860, 300])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
         splitter.setCollapsible(2, False)
@@ -330,18 +313,27 @@ class MainWindow(QMainWindow):
         return container
 
     def _apply_styles(self):
-        self.setStyleSheet(f"""
-            QMainWindow {{ background: {COLORS["bg"]}; }}
-            QToolBar {{ background: {COLORS["surface"]}; border-bottom: 1px solid {COLORS["border"]}; padding: 4px 8px; }}
-            QPushButton {{ background: {COLORS["surface2"]}; color: {COLORS["text_primary"]}; border: 1px solid {COLORS["border"]}; border-radius: 6px; padding: 6px 16px; font-size: 12px; }}
-            QPushButton:hover {{ background: {COLORS["surface3"]}; }}
-            QPushButton#primary {{ background: {COLORS["accent"]}; color: white; border: none; font-weight: 600; }}
-            QPushButton#primary:hover {{ background: {COLORS["accent_hover"]}; }}
-            QPushButton:disabled {{ background: {COLORS["surface2"]}; color: {COLORS["text_muted"]}; }}
-            QProgressBar {{ background: {COLORS["surface2"]}; border: none; border-radius: 3px; }}
-            QProgressBar::chunk {{ background: {COLORS["accent"]}; border-radius: 3px; }}
-            QSplitter::handle {{ background: {COLORS["border"]}; }}
-        """)
+        self.setStyleSheet(
+            f"""
+            QMainWindow {{ background: {COLORS['bg']}; }}
+            QWidget#topbar {{
+                background: {COLORS['surface']};
+                border-bottom: 1px solid {COLORS['border']};
+            }}
+            QLabel#topbarTitle {{
+                color: {COLORS['text_primary']};
+                font-size: 16px;
+                font-weight: 700;
+            }}
+            QLabel#topbarSubtitle {{
+                color: {COLORS['text_muted']};
+                font-size: 11px;
+            }}
+            QSplitter::handle {{
+                background: {COLORS['border']};
+            }}
+            """
+        )
 
     def _connect_signals(self):
         self._left_panel.calculateDose.connect(self._on_calculate_dose)
@@ -393,7 +385,7 @@ class MainWindow(QMainWindow):
     def _on_ocr_loaded(self, reader, model_type):
         self._ocr_reader = reader
         self._right_panel.success("OCR engine loaded")
-        self._status_bar.showMessage("Ready to use")
+        self._status_bar.showMessage("Ready")
         if self._current_image_path:
             self._btn_scan_text.setEnabled(True)
 
@@ -417,20 +409,25 @@ class MainWindow(QMainWindow):
     def _load_image(self, path):
         self._current_image_path = path
         self._right_panel.info(f"Loading image: {os.path.basename(path)}")
-        if self._center_panel.set_image(path):
-            self._right_panel.success(f"Image loaded: {os.path.basename(path)}")
-            self._status_bar.showMessage(f"Image loaded: {os.path.basename(path)}")
-            patient_info = DicomHandler.get_patient_info(path)
-            if patient_info.get("patient_id") or patient_info.get("name"):
-                self._left_panel.set_from_image_data(patient_info)
-                self._right_panel.info("Patient metadata extracted from DICOM")
-            if self._patient_csv_data:
-                self._try_match_patient(patient_info)
-            if self._yolo_model and self._ocr_reader:
-                self._btn_scan_text.setEnabled(True)
-        else:
+        if not self._center_panel.set_image(path):
             self._right_panel.error(f"Failed to load: {path}")
             QMessageBox.warning(self, "Load Error", f"Could not load image:\n{path}")
+            return
+
+        self._right_panel.success(f"Image loaded: {os.path.basename(path)}")
+        self._status_bar.showMessage(f"Image loaded: {os.path.basename(path)}")
+
+        patient_info = DicomHandler.get_patient_info(path)
+        self._left_panel.set_from_image_data(patient_info)
+        if patient_info.get("patient_id") or patient_info.get("name"):
+            self._right_panel.info("Patient data loaded from DICOM metadata")
+        else:
+            self._right_panel.warning("No DICOM patient metadata found")
+
+        if self._patient_csv_data:
+            self._try_match_patient(patient_info)
+        if self._yolo_model and self._ocr_reader:
+            self._btn_scan_text.setEnabled(True)
 
     @Slot()
     def _on_open_patient_data(self):
@@ -461,6 +458,7 @@ class MainWindow(QMainWindow):
     def _try_match_patient(self, patient_info):
         if not self._patient_csv_data:
             return
+
         extracted = {
             "patient_id": patient_info.get("patient_id", ""),
             "name": patient_info.get("name", ""),
@@ -470,7 +468,7 @@ class MainWindow(QMainWindow):
         matched = self._data_matcher.match_patient(extracted)
         if matched:
             self._left_panel.set_matched_data(matched)
-            self._right_panel.success("Patient data matched!")
+            self._right_panel.success("Patient data matched")
         else:
             self._left_panel.set_matched_data(None)
             self._right_panel.info("No matching patient data found")
@@ -489,7 +487,7 @@ class MainWindow(QMainWindow):
         self._btn_scan_text.setEnabled(False)
         self._btn_save_results.setEnabled(False)
         self._progress_bar.setValue(0)
-        self._right_panel.info("Starting text scan...")
+        self._right_panel.info("Starting OCR for embedded image text...")
 
         self._inference_thread = InferenceThread(
             self._yolo_model, self._ocr_reader, self._current_image_path, conf=0.25
@@ -510,9 +508,12 @@ class MainWindow(QMainWindow):
         self._progress_bar.setValue(100)
         self._center_panel.set_detections(result.detections)
 
+        exam_type = result.patient_info.get("study_description", "") or result.patient_info.get(
+            "modality", ""
+        )
         extracted_data = {
             "patient_name": result.patient_info.get("name", ""),
-            "exam_type": result.patient_info.get("study_description", ""),
+            "exam_type": exam_type,
             "notes": result.combined_text[:500]
             if len(result.combined_text) > 500
             else result.combined_text,
@@ -523,13 +524,13 @@ class MainWindow(QMainWindow):
         detection_count = len(result.detections)
         if detection_count > 0:
             self._right_panel.success(
-                f"Text scan complete! Found {detection_count} text regions"
+                f"OCR complete: {detection_count} text region(s) detected"
             )
             self._status_bar.showMessage(
-                f"Text found! {detection_count} regions detected"
+                f"Text detected in {detection_count} region(s)"
             )
         else:
-            self._right_panel.warning("No text detected in image")
+            self._right_panel.warning("No embedded text detected")
             self._status_bar.showMessage("No text found")
 
         self._btn_scan_text.setEnabled(True)
@@ -543,24 +544,32 @@ class MainWindow(QMainWindow):
         self._btn_scan_text.setEnabled(True)
         self._progress_bar.setValue(0)
 
+    def _parse_age(self, age_text: str) -> int:
+        match = re.search(r"\d+", age_text or "")
+        return int(match.group()) if match else 30
+
+    def _normalize_exam_type(self, exam_type: str) -> str:
+        normalized = (exam_type or "DEFAULT").strip().upper()
+        normalized = re.sub(r"[^A-Z0-9]+", "_", normalized).strip("_")
+        return normalized or "DEFAULT"
+
     @Slot(float)
     def _on_calculate_dose(self, weight):
-        data = self._left_panel._patient_id_label.text()
-        age_str = self._left_panel._age_label.text()
-        gender = self._left_panel._gender_label.text()
-        try:
-            age = int(age_str) if age_str and age_str != "-" else 30
-        except ValueError:
-            age = 30
+        age = self._parse_age(self._left_panel._age_label.text())
+        gender_label = (self._left_panel._gender_label.text() or "").strip().upper()
+        if gender_label.startswith("F"):
+            gender = "F"
+        elif gender_label.startswith("M"):
+            gender = "M"
+        else:
+            gender = "O"
 
-        exam_type = self._bottom_panel.get_exam_type()
-        if not exam_type:
-            exam_type = "DEFAULT"
-
+        exam_type = self._normalize_exam_type(self._bottom_panel.get_exam_type())
         result = DoseCalculator.estimate_dose(age, gender, weight, exam_type)
-        dose = result["estimated_dose_msv"]
+        dose = result["estimated_dose_mSv"]
         comparison = DoseCalculator.get_dose_comparison(dose)
         comp_text = f"~ {comparison['equivalent_chest_xrays']} chest X-rays"
+
         self._left_panel.set_dose_result(dose, comp_text)
         self._right_panel.info(f"Estimated dose: {dose:.2f} mSv")
 
@@ -578,25 +587,27 @@ class MainWindow(QMainWindow):
             f"results_{os.path.basename(self._current_image_path)}.csv",
             "CSV Files (*.csv);;All Files (*)",
         )
-        if path:
-            try:
-                import csv
+        if not path:
+            return
 
-                with open(path, "w", newline="", encoding="utf-8") as f:
-                    writer = csv.writer(f)
+        try:
+            import csv
+
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(
+                    ["Detection ID", "Text", "Confidence", "X1", "Y1", "X2", "Y2"]
+                )
+                for det in self._current_result.detections:
                     writer.writerow(
-                        ["Detection ID", "Text", "Confidence", "X1", "Y1", "X2", "Y2"]
+                        [det.get("id", 0), det.get("text", ""), det.get("conf", 0)]
+                        + det.get("xyxy", [0, 0, 0, 0])
                     )
-                    for det in self._current_result.detections:
-                        writer.writerow(
-                            [det.get("id", 0), det.get("text", ""), det.get("conf", 0)]
-                            + det.get("xyxy", [0, 0, 0, 0])
-                        )
-                self._right_panel.success(f"Results saved to {os.path.basename(path)}")
-                self._status_bar.showMessage("Results saved")
-            except Exception as e:
-                self._right_panel.error(f"Save error: {str(e)}")
-                QMessageBox.critical(self, "Save Error", str(e))
+            self._right_panel.success(f"Results saved to {os.path.basename(path)}")
+            self._status_bar.showMessage("Results saved")
+        except Exception as e:
+            self._right_panel.error(f"Save error: {str(e)}")
+            QMessageBox.critical(self, "Save Error", str(e))
 
     @Slot()
     def _on_clear_results(self):
@@ -609,11 +620,18 @@ class MainWindow(QMainWindow):
     @Slot(float)
     def _on_zoom_changed(self, zoom):
         percent = int(zoom * 100)
-        self._footer_label.setText(f"Size: -  |  Zoom: {percent}%")
+        self._footer_label.setText(f"Size: — | Zoom: {percent}%")
 
     @Slot()
     def _on_help(self):
-        help_text = "<h2>Radiology Reader Help</h2><p><b>1. Open Image:</b> Load a DICOM or standard image file.</p><p><b>2. Open Patient Data:</b> Load a CSV file with patient records.</p><p><b>3. Scan Text:</b> Run text detection and OCR on the loaded image.</p><p><b>4. Save Results:</b> Export detected text to CSV format.</p><p><b>5. Dose Estimation:</b> Enter patient weight and calculate estimated radiation dose.</p>"
+        help_text = (
+            "<h2>Radiology Reader</h2>"
+            "<p><b>1. Open Image</b>: Load a DICOM or standard image.</p>"
+            "<p><b>2. DICOM Metadata</b>: Patient identity is read from DICOM tags.</p>"
+            "<p><b>3. Scan Embedded Text</b>: OCR is used only for text rendered inside the image.</p>"
+            "<p><b>4. Open Patient Data</b>: Load CSV for matching.</p>"
+            "<p><b>5. Save Results</b>: Export detections to CSV.</p>"
+        )
         QMessageBox.information(self, "Help", help_text)
 
     def closeEvent(self, event):

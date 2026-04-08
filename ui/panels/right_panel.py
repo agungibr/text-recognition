@@ -1,6 +1,6 @@
 """
 Right Panel - Activity Log Module
-Displays application activity log.
+Clinical-style activity timeline with clear timestamps.
 """
 
 from datetime import datetime
@@ -22,7 +22,7 @@ from ui.theme import COLORS
 
 
 class RightPanel(QWidget):
-    """Activity Log Panel - displays application events."""
+    """Activity log panel for operational feedback."""
 
     logCleared = Signal()
 
@@ -43,91 +43,85 @@ class RightPanel(QWidget):
         header = self._build_header()
         root.addWidget(header)
 
-        container = self._build_log_area()
-        root.addWidget(container)
+        self._log_list = QListWidget()
+        self._log_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._log_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._log_list.setAlternatingRowColors(False)
+        root.addWidget(self._log_list, 1)
 
         self._apply_styles()
 
     def _build_header(self) -> QWidget:
         header = QWidget()
-        header.setObjectName("activityHeader")
-        lay = QHBoxLayout(header)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(8)
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
 
-        title = QLabel("Activity")
-        title.setObjectName("activityTitle")
-        lay.addWidget(title)
-        lay.addStretch()
+        title = QLabel("Activity Log")
+        title.setStyleSheet(
+            f"color: {COLORS['text_primary']}; font-size: 13px; font-weight: 600;"
+        )
+        layout.addWidget(title)
+
+        layout.addStretch()
 
         self._clear_btn = QPushButton("Clear")
-        self._clear_btn.setObjectName("clearBtn")
-        self._clear_btn.setFixedSize(50, 24)
+        self._clear_btn.setObjectName("secondary")
+        self._clear_btn.setFixedHeight(24)
         self._clear_btn.clicked.connect(self.clear)
-        lay.addWidget(self._clear_btn)
+        layout.addWidget(self._clear_btn)
 
+        header.setStyleSheet(
+            f"background: {COLORS['surface']}; border-bottom: 1px solid {COLORS['border']};"
+        )
         return header
 
-    def _build_log_area(self) -> QWidget:
-        container = QWidget()
-        container.setObjectName("logContainer")
-        lay = QVBoxLayout(container)
-        lay.setContentsMargins(12, 8, 12, 12)
-        lay.setSpacing(6)
-
-        self._log_list = QListWidget()
-        self._log_list.setObjectName("logList")
-        self._log_list.setAlternatingRowColors(False)
-        self._log_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        lay.addWidget(self._log_list)
-
-        return container
-
     def _apply_styles(self) -> None:
-        self.setStyleSheet(
-            f"QWidget#activityHeader {{ background: {COLORS['surface2']}; "
-            f"border-bottom: 1px solid {COLORS['border']}; }}"
-            f"QLabel#activityTitle {{ color: {COLORS['text_primary']}; "
-            f"font-size: 13px; font-weight: 600; }}"
-            f"QPushButton#clearBtn {{ background: transparent; "
-            f"color: {COLORS['text_muted']}; border: 1px solid {COLORS['border']}; "
-            f"border-radius: 4px; font-size: 11px; }}"
-            f"QPushButton#clearBtn:hover {{ background: {COLORS['surface3']}; "
-            f"color: {COLORS['text_secondary']}; }}"
-            f"QWidget#logContainer {{ background: {COLORS['bg']}; }}"
-            f"QListWidget#logList {{ background: {COLORS['surface']}; "
-            f"border: 1px solid {COLORS['border']}; border-radius: 6px; "
-            f"outline: none; padding: 4px; }}"
-            f"QListWidget::item {{ padding: 8px 10px; border-radius: 4px; "
-            f"border: none; margin: 1px 0; }}"
-            f"QListWidget::item:selected {{ background: transparent; }}"
+        self.setStyleSheet(f"background: {COLORS['bg']};")
+        self._log_list.setStyleSheet(
+            f"""
+            QListWidget {{
+                background: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 6px;
+                padding: 6px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 7px 8px;
+                margin: 1px 0;
+                border-radius: 4px;
+                border: none;
+            }}
+            QListWidget::item:hover {{
+                background: {COLORS['surface2']};
+            }}
+            QListWidget::item:selected {{
+                background: transparent;
+            }}
+            """
         )
 
     def append(self, message: str, log_type: str = TYPE_INFO) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
-        entry_text = f"[{timestamp}] {message}"
+        base_text = f"[{timestamp}] {message}"
 
-        item = QListWidgetItem(entry_text)
-        item.setData(Qt.ItemDataRole.UserRole, {"type": log_type, "message": message})
-
-        colors_map = {
+        icons = {
+            self.TYPE_INFO: "•",
+            self.TYPE_SUCCESS: "✓",
+            self.TYPE_WARNING: "!",
+            self.TYPE_ERROR: "✕",
+        }
+        colors = {
+            self.TYPE_INFO: COLORS["text_secondary"],
             self.TYPE_SUCCESS: COLORS["success"],
             self.TYPE_WARNING: COLORS["warning"],
             self.TYPE_ERROR: COLORS["error"],
-            self.TYPE_INFO: COLORS["text_secondary"],
         }
-        color = colors_map.get(log_type, COLORS["text_secondary"])
-        item.setForeground(QColor(color))
 
-        icons_map = {
-            self.TYPE_SUCCESS: "\u2713",
-            self.TYPE_WARNING: "\u26a0",
-            self.TYPE_ERROR: "\u2717",
-            self.TYPE_INFO: "\u25cf",
-        }
-        icon = icons_map.get(log_type, "\u25cf")
-        item.setText(f"{icon}  {entry_text}")
-
+        item = QListWidgetItem(f"{icons.get(log_type, '•')}  {base_text}")
+        item.setData(Qt.ItemDataRole.UserRole, {"type": log_type, "message": message})
+        item.setForeground(QColor(colors.get(log_type, COLORS["text_secondary"])))
         self._log_list.addItem(item)
         self._log_list.scrollToBottom()
 

@@ -82,7 +82,7 @@ LIGHT_COLORS = {
     "selection": "#3B7BA820",
 }
 
-COLORS = dict(DARK_COLORS)
+COLORS = dict(LIGHT_COLORS)  # Using light mode by default
 
 
 def build_stylesheet(c):
@@ -547,7 +547,7 @@ class ThemeManager:
 
     def __init__(self):
         self._settings = QSettings("RadiologyReader", "App")
-        saved = self._settings.value("theme/mode", "dark")
+        saved = self._settings.value("theme/mode", "light")
         self._is_dark = saved != "light"
         self._apply_current()
 

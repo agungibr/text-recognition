@@ -57,6 +57,12 @@ class BottomPanel(QWidget):
         )
         header.addWidget(self._status_label)
 
+        self._btn_save = QPushButton("Save Results")
+        self._btn_save.setObjectName("primary")
+        self._btn_save.setFixedHeight(28)
+        self._btn_save.clicked.connect(self.save_clicked)
+        header.addWidget(self._btn_save)
+
         self._btn_clear = QPushButton("Clear")
         self._btn_clear.setObjectName("secondary")
         self._btn_clear.setFixedHeight(28)

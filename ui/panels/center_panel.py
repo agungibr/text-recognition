@@ -12,7 +12,6 @@ import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QGraphicsPixmapItem,
     QGraphicsScene,
@@ -179,9 +178,10 @@ class CenterPanel(QWidget):
         layout.setContentsMargins(12, 0, 12, 0)
         layout.setSpacing(8)
 
-        zoom_text = QLabel("Zoom")
-        zoom_text.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
-        layout.addWidget(zoom_text)
+        # Zoom controls
+        zoom_label = QLabel("Zoom:")
+        zoom_label.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
+        layout.addWidget(zoom_label)
 
         self._zoom_out_btn = QPushButton("−")
         self._zoom_out_btn.setFixedSize(26, 26)
@@ -189,7 +189,7 @@ class CenterPanel(QWidget):
         layout.addWidget(self._zoom_out_btn)
 
         self._zoom_label = QLabel("100%")
-        self._zoom_label.setFixedWidth(56)
+        self._zoom_label.setFixedWidth(50)
         self._zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._zoom_label.setStyleSheet(
             f"color: {COLORS['text_primary']}; font-family: Consolas, monospace; font-size: 11px;"
@@ -201,22 +201,15 @@ class CenterPanel(QWidget):
         self._zoom_in_btn.clicked.connect(self._zoom_in)
         layout.addWidget(self._zoom_in_btn)
 
-        self._reset_zoom_btn = QPushButton("Reset")
-        self._reset_zoom_btn.setFixedHeight(26)
-        self._reset_zoom_btn.clicked.connect(self._reset_zoom)
-        layout.addWidget(self._reset_zoom_btn)
-
         self._fit_btn = QPushButton("Fit")
         self._fit_btn.setFixedHeight(26)
         self._fit_btn.clicked.connect(self._fit_view)
         layout.addWidget(self._fit_btn)
 
-        layout.addSpacing(12)
-
-        self._show_overlay_check = QCheckBox("Show Detections")
-        self._show_overlay_check.setChecked(True)
-        self._show_overlay_check.toggled.connect(self._toggle_overlay)
-        layout.addWidget(self._show_overlay_check)
+        self._reset_zoom_btn = QPushButton("Reset")
+        self._reset_zoom_btn.setFixedHeight(26)
+        self._reset_zoom_btn.clicked.connect(self._reset_zoom)
+        layout.addWidget(self._reset_zoom_btn)
 
         layout.addStretch()
 
@@ -251,7 +244,7 @@ class CenterPanel(QWidget):
 
     def _create_footer(self) -> QWidget:
         footer = QWidget()
-        footer.setFixedHeight(28)
+        footer.setFixedHeight(80)
         footer.setStyleSheet(
             f"""
             QWidget {{
@@ -261,29 +254,59 @@ class CenterPanel(QWidget):
             """
         )
 
-        layout = QHBoxLayout(footer)
-        layout.setContentsMargins(12, 0, 12, 0)
-        layout.setSpacing(20)
+        layout = QVBoxLayout(footer)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(4)
+
+        # First row: Image info
+        info_row1 = QWidget()
+        info_layout1 = QHBoxLayout(info_row1)
+        info_layout1.setContentsMargins(0, 0, 0, 0)
+        info_layout1.setSpacing(24)
 
         self._size_label = QLabel("Size: -")
         self._size_label.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 11px; font-family: Consolas, monospace;"
+            f"color: {COLORS['text_primary']}; font-size: 11px; font-family: Consolas, monospace; font-weight: 500;"
         )
-        layout.addWidget(self._size_label)
+        info_layout1.addWidget(self._size_label)
 
         self._footer_zoom_label = QLabel("Zoom: 100%")
         self._footer_zoom_label.setStyleSheet(
-            f"color: {COLORS['text_muted']}; font-size: 11px; font-family: Consolas, monospace;"
+            f"color: {COLORS['text_primary']}; font-size: 11px; font-family: Consolas, monospace; font-weight: 500;"
         )
-        layout.addWidget(self._footer_zoom_label)
+        info_layout1.addWidget(self._footer_zoom_label)
 
-        layout.addStretch()
+        info_layout1.addStretch()
 
         self._status_label = QLabel("Ready")
         self._status_label.setStyleSheet(
             f"color: {COLORS['text_secondary']}; font-size: 11px;"
         )
-        layout.addWidget(self._status_label)
+        info_layout1.addWidget(self._status_label)
+
+        layout.addWidget(info_row1)
+
+        # Second row: Pixel info (will be updated when mouse over image)
+        info_row2 = QWidget()
+        info_layout2 = QHBoxLayout(info_row2)
+        info_layout2.setContentsMargins(0, 0, 0, 0)
+        info_layout2.setSpacing(24)
+
+        self._mouse_pos_label = QLabel("X: - Y: -")
+        self._mouse_pos_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 10px; font-family: Consolas, monospace;"
+        )
+        info_layout2.addWidget(self._mouse_pos_label)
+
+        self._pixel_value_label = QLabel("Value: -")
+        self._pixel_value_label.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 10px; font-family: Consolas, monospace;"
+        )
+        info_layout2.addWidget(self._pixel_value_label)
+
+        info_layout2.addStretch()
+
+        layout.addWidget(info_row2)
 
         return footer
 
@@ -415,5 +438,7 @@ class CenterPanel(QWidget):
         self._size_label.setText("Size: -")
         self._zoom_label.setText("100%")
         self._footer_zoom_label.setText("Zoom: 100%")
+        self._mouse_pos_label.setText("X: - Y: -")
+        self._pixel_value_label.setText("Value: -")
         self._detection_count_lbl.setText("No detections")
         self._status_label.setText("Ready")

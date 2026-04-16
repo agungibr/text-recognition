@@ -1,7 +1,7 @@
 import os
 import re
 
-from PySide6.QtCore import Qt, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QSize
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -9,19 +9,24 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QSizePolicy,
     QSplitter,
     QStatusBar,
     QVBoxLayout,
     QWidget,
+    QMenuBar,
+    QMenu,
+    QToolBar,
+    QStyle,
 )
+from PySide6.QtGui import QIcon, QAction
 
 from core.data_matcher import DataMatcher
 from core.dicom_handler import DicomHandler
 from core.dose_calculator import DoseCalculator
 from services.database_service import DatabaseService
-from ui.panels.bottom_panel import BottomPanel
 from ui.panels.center_panel import CenterPanel
 from ui.panels.left_panel import LeftPanel
 from ui.panels.right_panel import RightPanel
@@ -62,22 +67,22 @@ class ModelLoaderThread(QThread):
 
 
 class InferenceThread(QThread):
-    """Background thread for YOLO + OCR inference."""
+    """Background thread for EasyOCR inference."""
 
     progress = Signal(int, str)
     result = Signal(object)
     error = Signal(str)
 
-    def __init__(self, yolo_model, ocr_reader, image_path, conf=0.25, parent=None):
+    def __init__(self, yolo_model, ocr_reader, image_path, conf=0.1, parent=None):
         super().__init__(parent)
-        self.yolo_model = yolo_model
-        self.ocr_reader = ocr_reader
+        self.ocr_reader = ocr_reader  # Only easyocr is used now
         self.image_path = image_path
         self.conf = conf
 
     def run(self):
         try:
             import cv2
+            import numpy as np
 
             self.progress.emit(10, "Loading image...")
             image = DicomHandler.load_image(self.image_path, include_overlay=True)
@@ -88,54 +93,39 @@ class InferenceThread(QThread):
             patient_info = DicomHandler.get_patient_info(self.image_path)
             self.progress.emit(20, "Reading DICOM metadata...")
 
-            # Use the rendered image directly so overlay text is visible to YOLO/OCR.
-            source = image
-            self.progress.emit(30, "Running text detection on rendered image...")
-            results = self.yolo_model.predict(source=source, conf=self.conf, verbose=False)
-
+            # Use easyocr for text detection and recognition
+            self.progress.emit(30, "Running text detection and recognition...")
+            
+            # Convert BGR to RGB for easyocr
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            # Use easyocr with detail=1 to get bounding boxes
+            ocr_results = self.ocr_reader.readtext(image_rgb, detail=1)
+            
             detections = []
-            orig_img = None
-            if results and len(results) > 0:
-                result = results[0]
-                orig_img = result.orig_img
-                for i, box in enumerate(result.boxes):
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    xc, yc, w, h = box.xywh[0].tolist()
-                    conf_val = float(box.conf[0])
-                    detections.append(
-                        {
-                            "id": i,
-                            "xyxy": [int(x1), int(y1), int(x2), int(y2)],
-                            "xywh": [xc, yc, w, h],
-                            "conf": conf_val,
-                            "text": "",
-                        }
-                    )
-
-            self.progress.emit(50, f"Found {len(detections)} text regions")
-
-            for i, det in enumerate(detections):
-                x1, y1, x2, y2 = det["xyxy"]
-                h_img, w_img = (
-                    orig_img.shape[:2] if orig_img is not None else image.shape[:2]
-                )
-                x1 = max(0, min(x1, w_img - 1))
-                y1 = max(0, min(y1, h_img - 1))
-                x2 = max(x1 + 1, min(x2, w_img))
-                y2 = max(y1 + 1, min(y2, h_img))
-                crop = (
-                    orig_img[y1:y2, x1:x2]
-                    if orig_img is not None
-                    else image[y1:y2, x1:x2]
-                )
-
-                if crop.size > 0:
-                    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-                    ocr_texts = self.ocr_reader.readtext(crop_rgb, detail=0)
-                    det["text"] = " ".join(ocr_texts)
-
-                pct = 50 + int((i + 1) / len(detections) * 40) if detections else 70
-                self.progress.emit(pct, f"Processing region {i + 1}/{len(detections)}")
+            if ocr_results:
+                for i, result in enumerate(ocr_results):
+                    # result format: (bbox, text, confidence)
+                    bbox = result[0]  # List of 4 corner points
+                    text = result[1]
+                    conf = result[2]
+                    
+                    # Convert corner points to xyxy format
+                    bbox_array = np.array(bbox, dtype=np.float32)
+                    x_coords = bbox_array[:, 0]
+                    y_coords = bbox_array[:, 1]
+                    x1, y1 = int(np.min(x_coords)), int(np.min(y_coords))
+                    x2, y2 = int(np.max(x_coords)), int(np.max(y_coords))
+                    
+                    detections.append({
+                        "id": i,
+                        "xyxy": [x1, y1, x2, y2],
+                        "xywh": [x1, y1, x2 - x1, y2 - y1],
+                        "conf": float(conf),
+                        "text": text,
+                    })
+            
+            self.progress.emit(60, f"Found {len(detections)} text regions")
 
             combined_text = " ".join(d["text"] for d in detections if d.get("text"))
             self.progress.emit(100, "Complete")
@@ -186,21 +176,175 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(self._create_topbar())
+        # Create menu bar
+        self._create_menubar()
+
+        # Create toolbar
+        self._create_toolbar()
+
+        # Main content area with panels
         root.addWidget(self._create_content_area(), 1)
 
-        self._bottom_panel = BottomPanel()
-        self._bottom_panel.setFixedHeight(220)
-        root.addWidget(self._bottom_panel)
-
+        # Status bar
         self._status_bar = QStatusBar()
         self._status_bar.setFixedHeight(28)
         self.setStatusBar(self._status_bar)
+        
+        # Add progress bar to status bar
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setFixedWidth(140)
+        self._progress_bar.setFixedHeight(6)
+        self._progress_bar.setTextVisible(False)
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
+        self._status_bar.addWidget(self._progress_bar)
+        
         self._footer_label = QLabel("Size: — | Zoom: 100%")
         self._footer_label.setStyleSheet(
             f"color: {COLORS['text_muted']}; font-size: 11px; padding-right: 6px;"
         )
         self._status_bar.addPermanentWidget(self._footer_label)
+
+    def _create_menubar(self):
+        """Create professional menu bar matching the wireframe."""
+        menubar = self.menuBar()
+        menubar.setStyleSheet(
+            f"""
+            QMenuBar {{
+                background: {COLORS['surface']};
+                color: {COLORS['text_primary']};
+                border-bottom: 1px solid {COLORS['border']};
+                padding: 0px;
+                margin: 0px;
+            }}
+            QMenuBar::item:selected {{
+                background: {COLORS['surface2']};
+            }}
+            QMenu {{
+                background: {COLORS['surface']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+            }}
+            QMenu::item:selected {{
+                background: {COLORS['accent_bg']};
+            }}
+            """
+        )
+
+        # File Menu
+        file_menu = menubar.addMenu("File")
+        file_menu.addAction("Open Image").triggered.connect(self._on_open_image)
+        file_menu.addAction("Open Patient Data").triggered.connect(self._on_open_patient_data)
+        file_menu.addSeparator()
+        file_menu.addAction("Exit").triggered.connect(self.close)
+
+        # Local Database Menu
+        db_menu = menubar.addMenu("Local Database")
+        db_menu.addAction("Import Data")
+        db_menu.addAction("Export Data")
+
+        # View Menu
+        view_menu = menubar.addMenu("View")
+        view_menu.addAction("Zoom In")
+        view_menu.addAction("Zoom Out")
+        view_menu.addAction("Fit to Window")
+
+        # Image Menu
+        image_menu = menubar.addMenu("Image")
+        image_menu.addAction("Scan Embedded Text").triggered.connect(self._on_scan_text)
+        image_menu.addAction("Save Results").triggered.connect(self._on_save_results)
+
+        # Options Menu
+        options_menu = menubar.addMenu("Options")
+        options_menu.addAction("Preferences")
+        options_menu.addAction("Settings")
+
+        # Help Menu
+        help_menu = menubar.addMenu("Help")
+        help_menu.addAction("About").triggered.connect(lambda: QMessageBox.about(
+            self, "About", "Radiology Reader v1.0\n\nAdvanced DICOM Viewer with OCR"
+        ))
+
+    def _create_toolbar(self):
+        """Create toolbar with navigation and action icons only."""
+        toolbar = self.addToolBar("Main Toolbar")
+        toolbar.setIconSize(QSize(20, 20))
+        toolbar.setMovable(False)
+        toolbar.setStyleSheet(
+            f"""
+            QToolBar {{
+                background: {COLORS['surface']};
+                border-bottom: 1px solid {COLORS['border']};
+                padding: 4px 8px;
+                spacing: 2px;
+            }}
+            QToolButton {{
+                color: {COLORS['text_primary']};
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 3px;
+                padding: 4px;
+                margin: 0px;
+                width: 28px;
+                height: 28px;
+            }}
+            QToolButton:hover {{
+                background: {COLORS['surface2']};
+                border: 1px solid {COLORS['border']};
+            }}
+            QToolButton:pressed {{
+                background: {COLORS['accent_bg']};
+            }}
+            """
+        )
+
+        # File operations
+        open_action = toolbar.addAction("📁")  # Folder icon
+        open_action.setToolTip("Open File")
+        open_action.triggered.connect(self._on_open_image)
+        
+        self._toolbar_save_action = toolbar.addAction("💾")  # Save icon
+        self._toolbar_save_action.setToolTip("Save Results")
+        self._toolbar_save_action.setEnabled(False)
+        self._toolbar_save_action.triggered.connect(self._on_save_results)
+        
+        toolbar.addSeparator()
+
+        # Navigation controls
+        prev_action = toolbar.addAction("⬅")  # Left arrow
+        prev_action.setToolTip("Previous Image")
+        prev_action.triggered.connect(lambda: None)
+        
+        next_action = toolbar.addAction("➡")  # Right arrow
+        next_action.setToolTip("Next Image")
+        next_action.triggered.connect(lambda: None)
+        
+        toolbar.addSeparator()
+
+        # OCR/Scan
+        self._toolbar_ocr_action = toolbar.addAction("🔍")  # Magnifying glass for OCR
+        self._toolbar_ocr_action.setToolTip("Run OCR Scan")
+        self._toolbar_ocr_action.setEnabled(False)
+        self._toolbar_ocr_action.triggered.connect(self._on_scan_text)
+        
+        toolbar.addSeparator()
+
+        # View controls
+        zoom_in_action = toolbar.addAction("🔎")  # Magnifying glass with plus
+        zoom_in_action.setToolTip("Zoom In")
+        zoom_in_action.triggered.connect(lambda: None)
+        
+        zoom_out_action = toolbar.addAction("🔍")  # Magnifying glass
+        zoom_out_action.setToolTip("Zoom Out")
+        zoom_out_action.triggered.connect(lambda: None)
+        
+        toolbar.addSeparator()
+
+        # Help
+        help_action = toolbar.addAction("❓")  # Question mark
+        help_action.setToolTip("Help")
+        help_action.triggered.connect(self._on_help)
 
     def _create_topbar(self) -> QWidget:
         topbar = QWidget()
@@ -315,19 +459,13 @@ class MainWindow(QMainWindow):
     def _apply_styles(self):
         self.setStyleSheet(
             f"""
-            QMainWindow {{ background: {COLORS['bg']}; }}
-            QWidget#topbar {{
+            QMainWindow {{ 
+                background: {COLORS['bg']}; 
+            }}
+            QStatusBar {{
                 background: {COLORS['surface']};
-                border-bottom: 1px solid {COLORS['border']};
-            }}
-            QLabel#topbarTitle {{
-                color: {COLORS['text_primary']};
-                font-size: 16px;
-                font-weight: 700;
-            }}
-            QLabel#topbarSubtitle {{
+                border-top: 1px solid {COLORS['border']};
                 color: {COLORS['text_muted']};
-                font-size: 11px;
             }}
             QSplitter::handle {{
                 background: {COLORS['border']};
@@ -336,10 +474,8 @@ class MainWindow(QMainWindow):
         )
 
     def _connect_signals(self):
-        self._left_panel.calculateDose.connect(self._on_calculate_dose)
+        self._right_panel.calculateDose.connect(self._on_calculate_dose)
         self._center_panel.zoom_changed.connect(self._on_zoom_changed)
-        self._bottom_panel.save_clicked.connect(self._on_save_results)
-        self._bottom_panel.clear_clicked.connect(self._on_clear_results)
 
     def _auto_load_models(self):
         model_path = os.path.join(
@@ -387,7 +523,7 @@ class MainWindow(QMainWindow):
         self._right_panel.success("OCR engine loaded")
         self._status_bar.showMessage("Ready")
         if self._current_image_path:
-            self._btn_scan_text.setEnabled(True)
+            self._toolbar_ocr_action.setEnabled(True)
 
     @Slot(str)
     def _on_model_error(self, error_msg):
@@ -419,6 +555,7 @@ class MainWindow(QMainWindow):
 
         patient_info = DicomHandler.get_patient_info(path)
         self._left_panel.set_from_image_data(patient_info)
+        self._right_panel.set_dicom_tags(patient_info)
         if patient_info.get("patient_id") or patient_info.get("name"):
             self._right_panel.info("Patient data loaded from DICOM metadata")
         else:
@@ -484,13 +621,22 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self._btn_scan_text.setEnabled(False)
-        self._btn_save_results.setEnabled(False)
+        self._toolbar_ocr_action.setEnabled(False)
+        self._toolbar_save_action.setEnabled(False)
         self._progress_bar.setValue(0)
         self._right_panel.info("Starting OCR for embedded image text...")
 
+        # Create progress dialog
+        self._ocr_progress = QProgressDialog(
+            "Running OCR scan...", None, 0, 100, self
+        )
+        self._ocr_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._ocr_progress.setRange(0, 100)
+        self._ocr_progress.setValue(0)
+        self._ocr_progress.show()
+
         self._inference_thread = InferenceThread(
-            self._yolo_model, self._ocr_reader, self._current_image_path, conf=0.25
+            self._yolo_model, self._ocr_reader, self._current_image_path, conf=0.1
         )
         self._inference_thread.progress.connect(self._on_inference_progress)
         self._inference_thread.result.connect(self._on_inference_complete)
@@ -501,9 +647,16 @@ class MainWindow(QMainWindow):
     def _on_inference_progress(self, value, message):
         self._progress_bar.setValue(value)
         self._status_bar.showMessage(message)
+        if hasattr(self, '_ocr_progress') and self._ocr_progress:
+            self._ocr_progress.setValue(value)
+            self._ocr_progress.setLabelText(message)
 
     @Slot(object)
     def _on_inference_complete(self, result):
+        # Close progress dialog
+        if hasattr(self, '_ocr_progress') and self._ocr_progress:
+            self._ocr_progress.close()
+        
         self._current_result = result
         self._progress_bar.setValue(100)
         self._center_panel.set_detections(result.detections)
@@ -519,7 +672,7 @@ class MainWindow(QMainWindow):
             else result.combined_text,
             "full_text": result.combined_text,
         }
-        self._bottom_panel.set_extracted_data(extracted_data)
+        # Extracted data can be accessed from result object directly
 
         detection_count = len(result.detections)
         if detection_count > 0:
@@ -533,15 +686,19 @@ class MainWindow(QMainWindow):
             self._right_panel.warning("No embedded text detected")
             self._status_bar.showMessage("No text found")
 
-        self._btn_scan_text.setEnabled(True)
-        self._btn_save_results.setEnabled(True)
+        self._toolbar_ocr_action.setEnabled(True)
+        self._toolbar_save_action.setEnabled(True)
 
     @Slot(str)
     def _on_inference_error(self, error_msg):
+        # Close progress dialog
+        if hasattr(self, '_ocr_progress') and self._ocr_progress:
+            self._ocr_progress.close()
+        
         self._right_panel.error(f"Scan error: {error_msg}")
         self._status_bar.showMessage(f"Error: {error_msg}")
         QMessageBox.critical(self, "Scan Error", error_msg)
-        self._btn_scan_text.setEnabled(True)
+        self._toolbar_ocr_action.setEnabled(True)
         self._progress_bar.setValue(0)
 
     def _parse_age(self, age_text: str) -> int:
@@ -564,7 +721,11 @@ class MainWindow(QMainWindow):
         else:
             gender = "O"
 
-        exam_type = self._normalize_exam_type(self._bottom_panel.get_exam_type())
+        # Get exam type from current result or patient info
+        exam_type = ""
+        if self._current_result:
+            exam_type = self._current_result.patient_info.get("study_description", "") or self._current_result.patient_info.get("modality", "")
+        exam_type = self._normalize_exam_type(exam_type)
         result = DoseCalculator.estimate_dose(age, gender, weight, exam_type)
         dose = result["estimated_dose_mSv"]
         comparison = DoseCalculator.get_dose_comparison(dose)
@@ -613,7 +774,6 @@ class MainWindow(QMainWindow):
     def _on_clear_results(self):
         self._current_result = None
         self._center_panel.clear()
-        self._bottom_panel.clear()
         self._left_panel.clear_all()
         self._right_panel.info("Results cleared")
 

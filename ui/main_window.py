@@ -1,7 +1,7 @@
 import os
 import re
 
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QSize
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QSize, QTimer
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -20,8 +20,10 @@ from PySide6.QtWidgets import (
     QMenu,
     QToolBar,
     QStyle,
+    QDialog,
+    QFrame,
 )
-from PySide6.QtGui import QIcon, QAction
+from PySide6.QtGui import QIcon, QAction, QFont
 
 from core.data_matcher import DataMatcher
 from core.dicom_handler import DicomHandler
@@ -31,6 +33,89 @@ from ui.panels.center_panel import CenterPanel
 from ui.panels.left_panel import LeftPanel
 from ui.panels.right_panel import RightPanel
 from ui.theme import COLORS, ThemeManager
+
+
+class LoadingSplashScreen(QDialog):
+    """Professional loading screen while models are initializing."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(400, 200)
+        
+        # Center on parent
+        if parent:
+            parent_rect = parent.geometry()
+            x = parent_rect.left() + (parent_rect.width() - 400) // 2
+            y = parent_rect.top() + (parent_rect.height() - 200) // 2
+            self.move(x, y)
+        
+        # Main content widget with background
+        main_frame = QFrame()
+        main_frame.setStyleSheet(f"""
+            QFrame {{
+                background: {COLORS['surface']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+            }}
+        """)
+        layout = QVBoxLayout(main_frame)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        # Title
+        title = QLabel("Initializing OCR Engine")
+        title_font = QFont()
+        title_font.setPointSize(12)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        title.setStyleSheet(f"color: {COLORS['text_primary']};")
+        layout.addWidget(title)
+        
+        # Message
+        self.message = QLabel("Loading machine learning models...")
+        self.message.setStyleSheet(f"color: {COLORS['text_secondary']};")
+        self.message.setWordWrap(True)
+        layout.addWidget(self.message)
+        
+        # Progress bar
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setStyleSheet(f"""
+            QProgressBar {{
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+                background: {COLORS['surface2']};
+                height: 8px;
+            }}
+            QProgressBar::chunk {{
+                background: {COLORS['accent']};
+                border-radius: 3px;
+            }}
+        """)
+        layout.addWidget(self.progress)
+        
+        # Detail label
+        self.detail = QLabel("Downloading and initializing...")
+        self.detail.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 10px;")
+        layout.addWidget(self.detail)
+        
+        layout.addStretch()
+        
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(main_frame)
+        
+    def set_message(self, text):
+        self.message.setText(text)
+        
+    def set_detail(self, text):
+        self.detail.setText(text)
+        
+    def set_progress(self, value):
+        self.progress.setValue(min(100, max(0, value)))
 
 
 class ModelLoaderThread(QThread):
@@ -73,9 +158,9 @@ class InferenceThread(QThread):
     result = Signal(object)
     error = Signal(str)
 
-    def __init__(self, yolo_model, ocr_reader, image_path, conf=0.1, parent=None):
+    def __init__(self, ocr_reader, image_path, conf=0.1, parent=None):
         super().__init__(parent)
-        self.ocr_reader = ocr_reader  # Only easyocr is used now
+        self.ocr_reader = ocr_reader
         self.image_path = image_path
         self.conf = conf
 
@@ -156,18 +241,20 @@ class MainWindow(QMainWindow):
 
         self._yolo_model = None
         self._ocr_reader = None
+        self._ocr_loaded = False
         self._current_image_path = None
         self._current_result = None
         self._patient_csv_data = []
         self._data_matcher = DataMatcher()
         self._database_service = DatabaseService()
         self._theme_mgr = ThemeManager()
+        self._splash_screen = None
+        self._ocr_loader = None
 
         self._build_ui()
         self._connect_signals()
         self._apply_styles()
         self.statusBar().showMessage("Ready")
-        self._auto_load_models()
 
     def _build_ui(self):
         central = QWidget()
@@ -323,7 +410,7 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
 
         # OCR/Scan
-        self._toolbar_ocr_action = toolbar.addAction("🔍")  # Magnifying glass for OCR
+        self._toolbar_ocr_action = toolbar.addAction("▶️")  # Play button for OCR
         self._toolbar_ocr_action.setToolTip("Run OCR Scan")
         self._toolbar_ocr_action.setEnabled(False)
         self._toolbar_ocr_action.triggered.connect(self._on_scan_text)
@@ -477,56 +564,21 @@ class MainWindow(QMainWindow):
         self._right_panel.calculateDose.connect(self._on_calculate_dose)
         self._center_panel.zoom_changed.connect(self._on_zoom_changed)
 
-    def _auto_load_models(self):
-        model_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "models",
-            "best.pt",
-        )
-        if os.path.exists(model_path):
-            self._load_yolo_model(model_path)
-
-    def _load_yolo_model(self, model_path):
-        self._status_bar.showMessage("Loading YOLO model...")
-        self._right_panel.info("Loading YOLO model...")
-
-        self._yolo_loader = ModelLoaderThread("yolo", model_path)
-        self._yolo_loader.progress.connect(
-            lambda msg, val: self._status_bar.showMessage(msg)
-        )
-        self._yolo_loader.loaded.connect(self._on_yolo_loaded)
-        self._yolo_loader.error.connect(self._on_model_error)
-        self._yolo_loader.start()
-
-    def _load_ocr_engine(self):
-        self._status_bar.showMessage("Loading OCR engine...")
-        self._right_panel.info("Loading OCR engine...")
-
-        self._ocr_loader = ModelLoaderThread("ocr")
-        self._ocr_loader.progress.connect(
-            lambda msg, val: self._status_bar.showMessage(msg)
-        )
-        self._ocr_loader.loaded.connect(self._on_ocr_loaded)
-        self._ocr_loader.error.connect(self._on_model_error)
-        self._ocr_loader.start()
-
-    @Slot(object, str)
-    def _on_yolo_loaded(self, model, model_type):
-        self._yolo_model = model
-        self._right_panel.success("YOLO model loaded")
-        self._status_bar.showMessage("YOLO model ready")
-        self._load_ocr_engine()
-
-    @Slot(object, str)
-    def _on_ocr_loaded(self, reader, model_type):
-        self._ocr_reader = reader
-        self._right_panel.success("OCR engine loaded")
-        self._status_bar.showMessage("Ready")
-        if self._current_image_path:
-            self._toolbar_ocr_action.setEnabled(True)
+    @Slot(str, int)
+    def _on_ocr_load_progress(self, msg, val):
+        """Update splash screen during OCR loading."""
+        if self._splash_screen:
+            self._splash_screen.set_detail(msg)
+            self._splash_screen.set_progress(10 + (val * 0.9))  # Progress from 10-100
+        self._status_bar.showMessage(msg)
 
     @Slot(str)
     def _on_model_error(self, error_msg):
+        # Close splash screen on error
+        if self._splash_screen:
+            self._splash_screen.close()
+            self._splash_screen = None
+        
         self._right_panel.error(f"Model error: {error_msg}")
         self._status_bar.showMessage(f"Error: {error_msg}")
         QMessageBox.critical(self, "Model Loading Error", error_msg)
@@ -555,7 +607,7 @@ class MainWindow(QMainWindow):
 
         patient_info = DicomHandler.get_patient_info(path)
         self._left_panel.set_from_image_data(patient_info)
-        self._right_panel.set_dicom_tags(patient_info)
+        self._right_panel.set_dicom_tags(patient_info, path)
         if patient_info.get("patient_id") or patient_info.get("name"):
             self._right_panel.info("Patient data loaded from DICOM metadata")
         else:
@@ -563,8 +615,11 @@ class MainWindow(QMainWindow):
 
         if self._patient_csv_data:
             self._try_match_patient(patient_info)
-        if self._yolo_model and self._ocr_reader:
-            self._btn_scan_text.setEnabled(True)
+        
+        # Enable OCR scan button when image is loaded (OCR will lazy-load on first scan)
+        self._toolbar_ocr_action.setEnabled(True)
+        if hasattr(self._right_panel, '_btn_scan_text'):
+            self._right_panel._btn_scan_text.setEnabled(True)
 
     @Slot()
     def _on_open_patient_data(self):
@@ -615,16 +670,55 @@ class MainWindow(QMainWindow):
         if not self._current_image_path:
             QMessageBox.warning(self, "No Image", "Please open an image first.")
             return
-        if not self._yolo_model or not self._ocr_reader:
-            QMessageBox.warning(
-                self, "Models Not Ready", "Please wait for models to load."
-            )
+        
+        # Load OCR on first scan if not already loaded
+        if not self._ocr_reader:
+            if not self._ocr_loaded:
+                self._ocr_loaded = True
+                self._toolbar_ocr_action.setEnabled(False)
+                
+                # Show splash screen
+                self._splash_screen = LoadingSplashScreen(self)
+                self._splash_screen.show()
+                self._splash_screen.set_message("Initializing OCR Engine")
+                self._splash_screen.set_detail("Downloading and setting up... (first time only)")
+                self._splash_screen.set_progress(10)
+                
+                # Load OCR and then scan
+                self._ocr_loader = ModelLoaderThread("ocr")
+                self._ocr_loader.progress.connect(self._on_ocr_load_progress)
+                self._ocr_loader.loaded.connect(lambda reader, _: self._on_ocr_loaded_then_scan(reader))
+                self._ocr_loader.error.connect(self._on_model_error)
+                self._ocr_loader.start()
+            else:
+                QMessageBox.warning(
+                    self, "Loading OCR", "OCR engine is initializing...\nPlease wait 1-2 minutes."
+                )
             return
+        
+        # OCR ready, proceed with scan
+        self._perform_ocr_scan()
 
+    def _on_ocr_loaded_then_scan(self, reader):
+        """Called when OCR loads on-demand, then starts the scan."""
+        self._ocr_reader = reader
+        self._toolbar_ocr_action.setEnabled(True)
+        self._right_panel.success("OCR ready! Scanning image...")
+        
+        # Close splash and perform scan
+        if self._splash_screen:
+            self._splash_screen.close()
+            self._splash_screen = None
+        
+        # Perform the scan
+        QTimer.singleShot(100, self._perform_ocr_scan)
+
+    def _perform_ocr_scan(self):
+        """Perform the actual OCR scan."""
         self._toolbar_ocr_action.setEnabled(False)
         self._toolbar_save_action.setEnabled(False)
         self._progress_bar.setValue(0)
-        self._right_panel.info("Starting OCR for embedded image text...")
+        self._right_panel.info("Scanning image for embedded text...")
 
         # Create progress dialog
         self._ocr_progress = QProgressDialog(
@@ -636,7 +730,7 @@ class MainWindow(QMainWindow):
         self._ocr_progress.show()
 
         self._inference_thread = InferenceThread(
-            self._yolo_model, self._ocr_reader, self._current_image_path, conf=0.1
+            self._ocr_reader, self._current_image_path, conf=0.1
         )
         self._inference_thread.progress.connect(self._on_inference_progress)
         self._inference_thread.result.connect(self._on_inference_complete)

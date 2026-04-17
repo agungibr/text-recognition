@@ -10,7 +10,7 @@ from typing import Optional
 import cv2
 import numpy as np
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtGui import QImage, QPainter, QPixmap, QColor, QFont
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsPixmapItem,
@@ -74,6 +74,13 @@ class DicomGraphicsView(QGraphicsView):
         return self._pixmap_item is not None
 
     def clear_image(self) -> None:
+        self._overlay_text = {
+            'top_left': [],
+            'top_right': [],
+            'bottom_left': [],
+            'bottom_right': []
+        }
+        self._zoom_percent = 100
         self._show_placeholder("No image loaded")
 
     def set_image(self, bgr_image: np.ndarray, preserve_view: bool = False) -> None:
@@ -144,6 +151,7 @@ class CenterPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current_image: Optional[np.ndarray] = None
+        self._current_path: str = None
         self._detections: list = []
         self._show_overlay = True
         self._build_ui()
@@ -321,8 +329,9 @@ class CenterPanel(QWidget):
         try:
             from core.dicom_handler import DicomHandler
 
-            image = DicomHandler.load_image(path, include_overlay=True)
+            image = DicomHandler.load_image(path)
             if image is None:
+                print(f"Error: DicomHandler.load_image returned None for {path}")
                 self._status_label.setText("Cannot load image")
                 self._graphics_view.clear_image()
                 return False
@@ -337,6 +346,7 @@ class CenterPanel(QWidget):
             self.image_loaded.emit(path, w, h)
             return True
         except Exception as e:
+            print(f"Exception in set_image: {e}")
             self._status_label.setText(f"Error: {str(e)}")
             self._graphics_view.clear_image()
             return False

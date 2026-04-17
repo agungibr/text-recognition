@@ -6,7 +6,7 @@ DICOM Tags, Scan Results, and Dose Calculation.
 from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDoubleSpinBox,
@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -172,38 +174,49 @@ class RightPanel(QWidget):
         return container
 
     def _create_tags_tab(self) -> QWidget:
-        """Create DICOM Tags tab."""
+        """Create DICOM Tags tab with table view."""
         container = QWidget()
         container.setStyleSheet(f"background: {COLORS['bg']};")
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Create scrollable area for tags
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        # Create table widget
+        self._tags_table = QTableWidget()
+        self._tags_table.setColumnCount(2)
+        self._tags_table.setHorizontalHeaderLabels([
+            "TAG Description", "Value"
+        ])
+        self._tags_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._tags_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._tags_table.setAlternatingRowColors(True)
+        self._tags_table.setStyleSheet(f"""
+            QTableWidget {{
+                background: {COLORS['surface']};
+                alternate-background-color: {COLORS['surface2']};
+                border: 1px solid {COLORS['border']};
+                gridline-color: {COLORS['border']};
+            }}
+            QTableWidget::item {{
+                padding: 4px;
+                border-bottom: 1px solid {COLORS['border']};
+            }}
+            QHeaderView::section {{
+                background: {COLORS['surface2']};
+                color: {COLORS['text_primary']};
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid {COLORS['border']};
+                font-weight: bold;
+                font-size: 10px;
+            }}
+        """)
+        
+        # Set column widths
+        self._tags_table.setColumnWidth(0, 200)  # Description
+        self._tags_table.setColumnWidth(1, 350)  # Value
 
-        scroll_content = QWidget()
-        scroll_content.setStyleSheet(f"background: {COLORS['bg']};")
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setContentsMargins(12, 12, 12, 12)
-        scroll_layout.setSpacing(8)
-
-        # DICOM Tags Card
-        self._tags_container = QWidget()
-        self._tags_container.setStyleSheet("background: transparent;")
-        self._tags_layout = QVBoxLayout(self._tags_container)
-        self._tags_layout.setContentsMargins(0, 0, 0, 0)
-        self._tags_layout.setSpacing(6)
-        self._update_tags({})
-        scroll_layout.addWidget(self._tags_container)
-
-        scroll_layout.addStretch()
-        scroll.setWidget(scroll_content)
-        layout.addWidget(scroll)
+        layout.addWidget(self._tags_table)
 
         return container
 
@@ -291,86 +304,65 @@ class RightPanel(QWidget):
 
         return container
 
-    def _update_tags(self, tags_dict: dict) -> None:
-        """Update DICOM tags display with ALL metadata."""
-        # Clear existing layout
-        while self._tags_layout.count():
-            child = self._tags_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
-        if not tags_dict:
-            empty_label = QLabel("No DICOM data loaded")
-            empty_label.setStyleSheet(f"color: {COLORS['text_muted']}; background: transparent;")
-            self._tags_layout.addWidget(empty_label)
+    def _update_tags(self, tags_dict: dict, image_path: str = None) -> None:
+        """Update DICOM tags table with TAG Description and Value only."""
+        self._tags_table.setRowCount(0)
+        
+        if not image_path:
             return
+        
+        try:
+            import pydicom
+            # Load the DICOM file to get all tags with metadata
+            ds = pydicom.dcmread(image_path, stop_before_pixels=False)
+            
+            # Collect all tags
+            tags_list = []
+            for elem in ds:
+                name = elem.name if hasattr(elem, 'name') else "Unknown"
+                
+                # Get value representation
+                value_str = str(elem.value)
+                if len(value_str) > 300:
+                    value_str = value_str[:297] + "..."
+                
+                tags_list.append({
+                    'name': name,
+                    'value': value_str
+                })
+            
+            # Add rows to table
+            for tag_info in tags_list:
+                row_pos = self._tags_table.rowCount()
+                self._tags_table.insertRow(row_pos)
+                
+                # Create items
+                name_item = QTableWidgetItem(tag_info['name'])
+                value_item = QTableWidgetItem(tag_info['value'])
+                
+                # Style items
+                for item in [name_item, value_item]:
+                    item.setFont(QFont("Courier", 9))
+                    item.setForeground(QColor(COLORS['text_primary']))
+                
+                # Set items
+                self._tags_table.setItem(row_pos, 0, name_item)
+                self._tags_table.setItem(row_pos, 1, value_item)
+            
+        except Exception as e:
+            row_pos = self._tags_table.rowCount()
+            self._tags_table.insertRow(row_pos)
+            error_item = QTableWidgetItem(f"Error loading tags: {str(e)}")
+            self._tags_table.setItem(row_pos, 0, error_item)
 
-        # Display ALL metadata from the dictionary
-        # Priority order for common fields
-        priority_fields = [
-            "patient_id", "name", "birth_date", "gender", "age", "weight",
-            "study_date", "study_time", "study_uid", "study_id", "study_description", "modality",
-            "series_date", "series_time", "series_uid", "series_number", "series_description",
-        ]
-
-        # Display priority fields first
-        displayed_keys = set()
-        for key in priority_fields:
-            if key in tags_dict:
-                # Convert underscore to space and capitalize
-                display_name = key.replace("_", " ").title()
-                value = tags_dict[key]
-                self._add_tag_row(display_name, str(value) if value else "—")
-                displayed_keys.add(key)
-
-        # Then display remaining fields alphabetically
-        remaining_keys = sorted([k for k in tags_dict.keys() if k not in displayed_keys])
-        for key in remaining_keys:
-            # Skip internal/system keys
-            if not key.startswith("_"):
-                display_name = key.replace("_", " ").title()
-                value = tags_dict[key]
-                self._add_tag_row(display_name, str(value) if value else "—")
-
-    def _add_tag_row(self, label: str, value: str) -> None:
-        """Add a tag label-value row with proper spacing."""
-        row = QWidget()
-        row.setStyleSheet("background: transparent;")
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-
-        lbl = QLabel(label)
-        lbl.setStyleSheet(f"""
-            color: {COLORS["text_label"]};
-            font-size: 11px;
-            font-weight: 500;
-            background: transparent;
-        """)
-        lbl.setMinimumWidth(80)
-        lbl.setMaximumWidth(80)
-
-        val = QLabel(value)
-        val.setStyleSheet(f"""
-            color: {COLORS["text_primary"]};
-            font-size: 11px;
-            font-family: "Consolas", "SF Mono", monospace;
-            background: transparent;
-        """)
-        val.setWordWrap(True)
-
-        layout.addWidget(lbl)
-        layout.addWidget(val, 1)
-
-        self._tags_layout.addWidget(row)
 
     def _on_calculate_clicked(self) -> None:
         weight = self._weight_input.value()
         self.calculateDose.emit(weight)
 
-    def set_dicom_tags(self, tags: dict) -> None:
-        """Set and display DICOM tags."""
-        self._update_tags(tags)
+    def set_dicom_tags(self, tags: dict, image_path: str = None) -> None:
+        """Set and display DICOM tags from image path or dict."""
+        self._update_tags(tags, image_path)
         # Update scan text tab
         self._scan_id_value.setText(tags.get("patient_id", "—"))
         self._scan_gender_value.setText(tags.get("gender", "—"))

@@ -506,7 +506,10 @@ class DicomHandler:
                 metadata = DicomHandler.extract_metadata_from_dataset(ds)
                 image_bgr = DicomHandler.render_metadata_overlay(image_bgr, metadata)
             return image_bgr
-        except Exception:
+        except Exception as e:
+            print(f"Error loading DICOM {path}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     @staticmethod
@@ -560,6 +563,103 @@ class DicomHandler:
                 return magic == b"DICM"
         except Exception:
             return False
+
+    @staticmethod
+    def get_overlay_text(path: str) -> dict:
+        """Extract overlay metadata organized for 4-corner display like MicroDICOM.
+        
+        Returns dict with keys: 'top_left', 'top_right', 'bottom_left', 'bottom_right'
+        Each containing a list of text lines to display in that corner.
+        """
+        if not Path(path).exists():
+            return {'top_left': [], 'top_right': [], 'bottom_left': [], 'bottom_right': []}
+        
+        try:
+            ds = pydicom.dcmread(path, force=True)
+            
+            # Extract metadata with safe access
+            name = DicomHandler._safe_get_attr(ds, "PatientName", "").strip() or "Unknown"
+            patient_id = DicomHandler._safe_get_attr(ds, "PatientID", "").strip() or ""
+            birth_date = DicomHandler._format_dicom_date(DicomHandler._safe_get_attr(ds, "PatientBirthDate", ""))
+            gender = DicomHandler._format_gender(DicomHandler._safe_get_attr(ds, "PatientSex", ""))
+            study_desc = DicomHandler._safe_get_attr(ds, "StudyDescription", "").strip() or ""
+            
+            institution = DicomHandler._safe_get_attr(ds, "InstitutionName", "").strip() or ""
+            manufacturer = DicomHandler._safe_get_attr(ds, "Manufacturer", "").strip() or ""
+            manufacturer_model = DicomHandler._safe_get_attr(ds, "ManufacturerModelName", "").strip() or ""
+            referring_physician = DicomHandler._safe_get_attr(ds, "ReferringPhysicianName", "").strip() or ""
+            
+            study_date = DicomHandler._format_dicom_date(DicomHandler._safe_get_attr(ds, "StudyDate", ""))
+            study_time = DicomHandler._safe_get_attr(ds, "StudyTime", "").strip() or ""
+            
+            # Format study time HHmmss.ffffff -> HH:mm:ss
+            if study_time and len(study_time) >= 6:
+                study_time = f"{study_time[0:2]}:{study_time[2:4]}:{study_time[4:6]}"
+            
+            # Get transfer syntax and other info
+            transfer_syntax = "Unknown"
+            try:
+                ts = ds.file_meta.TransferSyntaxUID
+                if "LittleEndian" in str(ts):
+                    transfer_syntax = "LittleEndianImplicit"
+                elif "BigEndian" in str(ts):
+                    transfer_syntax = "BigEndianImplicit"
+                else:
+                    transfer_syntax = str(ts).split(".")[-1][:20]
+            except:
+                pass
+            
+            # Get exposure parameters
+            exposure_time = DicomHandler._safe_get_attr(ds, "ExposureTime", "").strip() or ""
+            xray_current = DicomHandler._safe_get_attr(ds, "XRayTubeCurrent", "").strip() or ""
+            kvp = DicomHandler._safe_get_attr(ds, "KVP", "").strip() or ""
+            
+            # Pixel spacing
+            pixel_spacing = "PX"
+            try:
+                ps = ds.PixelSpacing
+                if ps:
+                    pixel_spacing = f"PX: {ps[0]}"
+            except:
+                pass
+            
+            overlay_dict = {
+                'top_left': [
+                    name,
+                    patient_id,
+                    f"{birth_date} {gender}".strip(),
+                    study_desc
+                ],
+                'top_right': [
+                    institution,
+                    manufacturer_model,
+                    referring_physician,
+                    f"{study_date} {study_time}".strip()
+                ],
+                'bottom_left': [
+                    "ST: 0.00 mm",
+                    pixel_spacing,
+                    transfer_syntax,
+                    "Images: 1/1"
+                ],
+                'bottom_right': []  # Will be filled with dynamic data (zoom, WL, WW)
+            }
+            
+            # Add exposure parameters if available
+            if xray_current or kvp:
+                voltage_str = ""
+                if xray_current:
+                    voltage_str += f"{xray_current} mA"
+                if kvp:
+                    if voltage_str:
+                        voltage_str += f" {kvp} kV"
+                    else:
+                        voltage_str = f"{kvp} kV"
+                overlay_dict['bottom_right'].append(voltage_str)
+            
+            return overlay_dict
+        except Exception as e:
+            return {'top_left': [], 'top_right': [], 'bottom_left': [], 'bottom_right': []}
 
     @staticmethod
     def get_patient_info(path: str) -> dict:

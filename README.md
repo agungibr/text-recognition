@@ -61,4 +61,3 @@ pyinstaller build.spec --noconfirm
 4. Click **Load Model** → **Load OCR** → add files → **Run Detection**
 
 > **Note:** The output folder is large (1–2 GB+) because it bundles the full ML stack. Distribute the entire `dist\YoloOCR\` folder — the executable will not work if moved alone.
-

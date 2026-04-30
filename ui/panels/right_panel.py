@@ -1,6 +1,6 @@
 """
 Right Panel - Tabbed Display Module
-DICOM Tags, Scan Results, and Dose Calculation.
+DICOM Tags, Scan Results, Dose Calculation, and INAK/ESAK.
 """
 
 from datetime import datetime
@@ -25,12 +25,14 @@ from PySide6.QtWidgets import (
 )
 
 from ui.theme import COLORS
+from ui.panels.inak_esak_panel import INAKESAKPanel
 
 
 class RightPanel(QWidget):
     """Right panel - Tabbed display for Tags, Scan Results, and Dose Calculation."""
 
     calculateDose = Signal(float)
+    calculateINAKESAK = Signal(float, float, float, float, float, float)
 
     TYPE_INFO = "info"
     TYPE_SUCCESS = "success"
@@ -87,6 +89,13 @@ class RightPanel(QWidget):
 
         # Tab 3: Scan & Calculate
         self._tabs.addTab(self._create_calculate_tab(), "Scan & Calculate")
+
+        # Tab 4: INAK / ESAK
+        self._inak_panel = INAKESAKPanel()
+        self._inak_panel.calculateRequested.connect(
+            lambda kvp, ma, t, bsf, a, b: self.calculateINAKESAK.emit(kvp, ma, t, bsf, a, b)
+        )
+        self._tabs.addTab(self._inak_panel, "INAK / ESAK")
 
         root.addWidget(self._tabs)
         self._apply_styles()

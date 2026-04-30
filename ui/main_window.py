@@ -28,6 +28,7 @@ from PySide6.QtGui import QIcon, QAction, QFont
 from core.data_matcher import DataMatcher
 from core.dicom_handler import DicomHandler
 from core.dose_calculator import DoseCalculator
+from core.inak_esak_calculator import INAKESAKCalculator
 from services.database_service import DatabaseService
 from ui.panels.center_panel import CenterPanel
 from ui.panels.left_panel import LeftPanel
@@ -247,6 +248,7 @@ class MainWindow(QMainWindow):
         self._patient_csv_data = []
         self._data_matcher = DataMatcher()
         self._database_service = DatabaseService()
+        self._inak_calculator = INAKESAKCalculator()
         self._theme_mgr = ThemeManager()
         self._splash_screen = None
         self._ocr_loader = None
@@ -562,6 +564,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         self._right_panel.calculateDose.connect(self._on_calculate_dose)
+        self._right_panel.calculateINAKESAK.connect(self._on_calculate_inak_esak)
         self._center_panel.zoom_changed.connect(self._on_zoom_changed)
 
     @Slot(str, int)
@@ -615,6 +618,10 @@ class MainWindow(QMainWindow):
 
         if self._patient_csv_data:
             self._try_match_patient(patient_info)
+
+        # Auto-fill INAK/ESAK exposure parameters from DICOM
+        exposure_params = INAKESAKCalculator.extract_exposure_params_from_path(path)
+        self._right_panel._inak_panel.set_dicom_params(exposure_params)
         
         # Enable OCR scan button when image is loaded (OCR will lazy-load on first scan)
         self._toolbar_ocr_action.setEnabled(True)
@@ -827,6 +834,30 @@ class MainWindow(QMainWindow):
 
         self._left_panel.set_dose_result(dose, comp_text)
         self._right_panel.info(f"Estimated dose: {dose:.2f} mSv")
+
+    @Slot(float, float, float, float, float, float)
+    def _on_calculate_inak_esak(self, kvp, ma, exposure_time_s, bsf, coeff_a, coeff_b):
+        """Handle INAK/ESAK calculation from the panel."""
+        try:
+            self._inak_calculator.coeff_a = coeff_a
+            self._inak_calculator.coeff_b = coeff_b
+
+            result = self._inak_calculator.calculate_all(
+                kvp=kvp,
+                ma=ma,
+                exposure_time_s=exposure_time_s,
+                bsf=bsf,
+            )
+            self._right_panel._inak_panel.set_result(result)
+            self._right_panel.info(
+                f"ESAK = {result.esak_mgy:.6f} mGy | INAK = {result.inak_mgy:.6f} mGy"
+            )
+            self._status_bar.showMessage(
+                f"y={result.y_mgy:.4f} mGy  |  INAK={result.inak_mgy:.6f} mGy  |  ESAK={result.esak_mgy:.6f} mGy"
+            )
+        except Exception as e:
+            self._right_panel.error(f"Calculation error: {str(e)}")
+            QMessageBox.critical(self, "Calculation Error", str(e))
 
     @Slot()
     def _on_save_results(self):
